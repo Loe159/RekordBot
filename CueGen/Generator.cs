@@ -379,68 +379,126 @@ namespace CueGen
             var beats = content.GetBeats(Config);
             if (!beats.Any()) return new();
 
-            var groups = new List<List<PhraseEntry>>();
-            var groupKind = -1;
-            var groupPhrases = new List<PhraseEntry>();
             var phraseOrder = Config.PhraseOrder ?? DefaultPhraseOrder;
-            var startBeat = -1;
-
-            foreach (var phrase in phrases)
-            {
-                if (phraseOrder.TryGetValue(phrase.Kind.Group, out var order))
-                {
-                    if (order != groupKind)
-                    {
-                        if (groupPhrases.Any())
-                        {
-                            var len = (phrase.Beat - startBeat) / 4;
-                            if (len >= Config.MinPhraseLength)
-                                groups.Add(groupPhrases);
-                        }
-                        groupPhrases = new();
-                        groupKind = order;
-                        startBeat = phrase.Beat;
-                    }
-
-                    groupPhrases.Add(phrase);
-                }
-                else
-                {
-                    groupKind = -1;
-                }
-            }
-
-            if (groupPhrases.Any())
-            {
-                var len = (phraseTag.EndBeat - startBeat) / 4;
-                if (len >= Config.MinPhraseLength)
-                    groups.Add(groupPhrases);
-            }
-
+            var phraseNames = Config.PhraseNames ?? DefaultPhraseNames;
             var cues = new List<CuePoint>();
 
-            foreach (var group in groups)
+            // Grouper les phrases consécutives du même type
+            PhraseEntry previousPhrase = null;
+            foreach (var phrase in phrases)
             {
-                var startPhrase = group[0];
-                var beatNum = startPhrase.Beat - 1;
-                var phraseNames = Config.PhraseNames ?? DefaultPhraseNames;
+                if (!phraseOrder.ContainsKey(phrase.Kind.Group))
+                    continue;
 
-                phraseNames.TryGetValue(startPhrase.Kind.Group, out var name);
+                // Créer un hotcue seulement si c'est une nouvelle phrase (pas la même que la précédente)
+                if (previousPhrase == null || previousPhrase.Kind.Group != phrase.Kind.Group)
+                {
+                    var beatNum = phrase.Beat - 1;
+                    phraseNames.TryGetValue(phrase.Kind.Group, out var name);
 
-                if (beatNum >= 0 && beatNum < beats.Count)
-                    cues.Add(new CuePoint
+                    // Si le beat est hors limites, utiliser le beat le plus proche disponible
+                    if (beatNum < 0)
+                        beatNum = 0;
+                    else if (beatNum >= beats.Count)
+                        beatNum = beats.Count - 1;
+
+                    if (beatNum >= 0 && beatNum < beats.Count)
                     {
-                        Name = name,
-                        Time = beats[beatNum].Time,
-                        Phrase = startPhrase
-                    });
-                else
-                    Log.Warn("Beat number {beatNum} not found in grid analysis", beatNum);
+                        cues.Add(new CuePoint
+                        {
+                            Name = name,
+                            Time = beats[beatNum].Time,
+                            Phrase = phrase,
+                            Type = CueType.Hot
+                        });
+                        
+                        if (phrase.Beat - 1 >= beats.Count)
+                            Log.Warn("Beat number {beatNum} not found in grid analysis, using closest beat {closestBeat}", phrase.Beat - 1, beatNum);
+                    }
+                }
+
+                previousPhrase = phrase;
             }
 
             return cues;
         }
 
+        private List<CuePoint> GetInterPhraseCuePoints(Content content)
+        {
+            var extAnlz = content.GetAnlz(AnalysisKind.Ext, Config);
+            if (extAnlz?.Sections == null) return new();
+
+            var phraseTag = extAnlz.Sections
+                .Select(s => s.Tag)
+                .OfType<PhraseTag>()
+                .FirstOrDefault();
+
+            if (phraseTag?.Phrases == null || !phraseTag.Phrases.Any())
+                return new();
+
+            var beats = content.GetBeats(Config);
+            if (!beats.Any()) return new();
+
+            var cues = new List<CuePoint>();
+            var phrases = phraseTag.Phrases.OrderBy(p => p.Beat).ToList();
+            var phraseOrder = Config.PhraseOrder ?? DefaultPhraseOrder;
+
+            // Grouper les phrases consécutives identiques
+            for (int i = 0; i < phrases.Count; i++)
+            {
+                var phrase = phrases[i];
+                
+                // Vérifier si la phrase est dans phraseOrder
+                if (!phraseOrder.ContainsKey(phrase.Kind.Group))
+                    continue;
+
+                var startBeat = phrase.Beat - 1;
+                
+                // Trouver la fin de ce groupe de phrases (même type consécutif)
+                int j = i + 1;
+                while (j < phrases.Count && phrases[j].Kind.Group == phrase.Kind.Group)
+                {
+                    j++;
+                }
+                
+                // endBeat est soit le début de la prochaine phrase différente, soit la fin du morceau
+                var endBeat = (j < phrases.Count)
+                    ? phrases[j].Beat - 1
+                    : phraseTag.EndBeat - 1;
+
+                // Sécurité
+                startBeat = Math.Max(startBeat, 0);
+                endBeat = Math.Min(endBeat, beats.Count - 1);
+
+                // Partir de endBeat et revenir de 32 en 32 beats jusqu'à startBeat
+                // On commence à endBeat - 32 pour laisser de l'espace avant la phrase suivante
+                int firstMemoryCueBeat = endBeat - ((endBeat - startBeat) % 32);
+                if (firstMemoryCueBeat == endBeat) 
+                    firstMemoryCueBeat -= 32;
+                
+                for (int b = firstMemoryCueBeat; b > startBeat; b -= 32)
+                {
+                    if (b < 0 || b >= beats.Count) continue;
+
+                    cues.Add(new CuePoint
+                    {
+                        Time = beats[b].Time,
+                        Phrase = phrase,
+                        Name = DefaultPhraseNames.TryGetValue(phrase.Kind.Group, out var n)
+                            ? n
+                            : phrase.Kind.Group.ToString(),
+                        Type = CueType.Memory
+                    });
+                }
+                
+                // Sauter toutes les phrases du même groupe qu'on vient de traiter
+                i = j - 1;
+            }
+
+            return cues;
+        }
+
+        
         private void CreateLoops(Cue cue, List<Cue> cues, int cueNum, List<CuePoint> cueCandidates, Content content)
         {
             if (Config.LoopIntroLength > 0 && cueNum == 1 && (!cues.Any() || cue.InMsec < cues.Min(c => c.InMsec)))
@@ -495,6 +553,12 @@ namespace CueGen
             {
                 Log.Info("Getting cue points from phrase analysis for {contentID} with file at {path}", content.ID, content.FolderPath);
                 cuePoints = GetPhraseCuePoints(content) ?? new();
+                
+                if (Config.PhraseHotCuesMemoryCues)
+                {
+                    var phraseMemoryCues = GetInterPhraseCuePoints(content);
+                    cuePoints.AddRange(phraseMemoryCues);
+                }
             }
             else
             {
@@ -530,31 +594,37 @@ namespace CueGen
             {
                 Log.Info("Removing existing generated cue points for {contentID}", content.ID);
 
-                cues.RemoveAll(c => c.UUID.StartsWith(UUIDPrefix)
-                               && ((c.Kind == 0 && !Config.HotCues) || (c.Kind > 0 && Config.HotCues)));
+                cues.RemoveAll(c => c.UUID.StartsWith(UUIDPrefix));
 
                 if (!Config.DryRun)
                     db.Table<Cue>().Delete(c => c.ContentID == content.ID
-                                           && c.UUID.StartsWith(UUIDPrefix)
-                                           && ((c.Kind == 0 && !Config.HotCues) || (c.Kind > 0 && Config.HotCues)));
+                                           && c.UUID.StartsWith(UUIDPrefix));
             }
 
             if (!Config.RemoveOnly)
             {
                 var cueCandidates = new List<CuePoint>();
-                var maxCues = Config.MaxCues - cues.Count(c => (c.Kind == 0 && !Config.HotCues) || (c.Kind > 0 && Config.HotCues));
-
-                maxCues = Math.Min(Config.HotCues ? 8 : 10, maxCues);
-
-                Log.Info("Can create {cues} cue points", maxCues);
-
-                // iterate alternatingly between front and back
-                foreach (var cue in cuePoints.OrderBy(c => c.Time)
-                    .Select((c, i) => (Cue: c, Index: i))
-                    .OrderBy(c => Math.Min(c.Index, Math.Abs((cuePoints.Count - 1) - c.Index)))
-                    .Select(c => c.Cue))
+                
+                if (Config.PhraseHotCuesMemoryCues)
                 {
-                    if (cueCandidates.Count >= maxCues)
+                    // Séparer les hotcues et memory cues
+                    var hotCueCandidates = cuePoints.Where(c => c.Type == CueType.Hot).OrderBy(c => c.Time).ToList();
+                    var memoryCueCandidates = cuePoints.Where(c => c.Type == CueType.Memory).OrderBy(c => c.Time).ToList();
+                    
+                    // Pour les hotcues: limité à 16
+                    var maxHotCues = Math.Min(16, Config.MaxCues) - cues.Count(c => c.Kind > 0);
+                    maxHotCues = Math.Max(0, maxHotCues);
+                    
+                    // Pour les memory cues: pas de limite stricte
+                    var maxMemoryCues = Config.MaxCues - cues.Count(c => c.Kind == 0);
+                    maxMemoryCues = Math.Max(0, maxMemoryCues);
+
+                    Log.Info("Can create {hotcues} hot cues and {memorycues} memory cues", maxHotCues, maxMemoryCues);
+
+                    // Ajouter d'abord les hotcues (limité à 16)
+                    foreach (var cue in hotCueCandidates)
+                {
+                    if (cueCandidates.Count(c => c.Type == CueType.Hot) >= maxHotCues)
                         break;
 
                     if (Config.CueOffset != 0 && content.Length.HasValue)
@@ -564,13 +634,13 @@ namespace CueGen
                         SnapToBar(content, cue);
 
                     var bars = Bars(cue.Time, bpm);
-                    // Find close cues of the same kind we are generating
+                    // Find close hot cues
                     var closeCues = cues.Where(c => Math.Abs(Bars(c.InMsec ?? 0, bpm) - bars) < Config.MinDistanceBars
-                                               && ((c.Kind == 0 && !Config.HotCues) || (c.Kind > 0 && Config.HotCues))).ToList();
+                                               && c.Kind > 0).ToList();
 
-                    Log.Info("Cue point candidate #{num} is at {time}ms ({bars} bars)", cueNum, cue.Time, bars);
-                    if (cue.Energy > 0)
-                        Log.Info("Energy is {energy}", cue.Energy);
+                    Log.Info("Hot cue candidate #{num} is at {time}ms ({bars} bars)", cueNum, cue.Time, bars);
+                    if ((int)cue.Energy > 0)
+                        Log.Info("Energy is {energy}", (int)cue.Energy);
                     if (cue.Phrase != null)
                         Log.Info("Phrase is {phrase}", DefaultPhraseNames[cue.Phrase.Kind.Group]);
 
@@ -587,6 +657,96 @@ namespace CueGen
                     }
 
                     cueNum++;
+                }
+                
+                // Ensuite ajouter les memory cues
+                foreach (var cue in memoryCueCandidates)
+                {
+                    if (cueCandidates.Count(c => c.Type == CueType.Memory) >= maxMemoryCues)
+                        break;
+
+                    if (Config.CueOffset != 0 && content.Length.HasValue)
+                        OffsetCue(cue, bpm, content.Length.Value, Config.CueOffset);
+
+                    if (Config.SnapToBar)
+                        SnapToBar(content, cue);
+
+                    var bars = Bars(cue.Time, bpm);
+                    // Find close memory cues
+                    var closeCues = cues.Where(c => Math.Abs(Bars(c.InMsec ?? 0, bpm) - bars) < Config.MinDistanceBars
+                                               && c.Kind == 0).ToList();
+
+                    Log.Info("Memory cue candidate #{num} is at {time}ms ({bars} bars)", cueNum, cue.Time, bars);
+                    if ((int)cue.Energy > 0)
+                        Log.Info("Energy is {energy}", (int)cue.Energy);
+                    if (cue.Phrase != null)
+                        Log.Info("Phrase is {phrase}", DefaultPhraseNames[cue.Phrase.Kind.Group]);
+
+                    if (!closeCues.Any())
+                    {
+                        cueCandidates.Add(cue);
+                    }
+                    else
+                    {
+                        Log.Info("Ignoring cue point because there is an existing cue point within {bars} bars", Config.MinDistanceBars);
+                        Log.Info("Close cues:");
+                        foreach (var closeCue in closeCues)
+                            Log.Info("ID {cueID} at {time}ms ({bars} bars)", closeCue.ID, closeCue.InMsec, Bars(closeCue.InMsec ?? 0, bpm));
+                    }
+
+                    cueNum++;
+                }
+                }
+                else
+                {
+                    // Comportement original (sans séparation hotcues/memory cues)
+                    var maxCues = Config.MaxCues - cues.Count(c => (c.Kind == 0 && !Config.HotCues) || (c.Kind > 0 && Config.HotCues));
+
+                    if (Config.HotCues)
+                        maxCues = Math.Min(8, maxCues);
+
+                    Log.Info("Can create {cues} cue points", maxCues);
+
+                    // iterate alternatingly between front and back
+                    foreach (var cue in cuePoints.OrderBy(c => c.Time)
+                        .Select((c, i) => (Cue: c, Index: i))
+                        .OrderBy(c => Math.Min(c.Index, Math.Abs((cuePoints.Count - 1) - c.Index)))
+                        .Select(c => c.Cue))
+                    {
+                        if (cueCandidates.Count >= maxCues)
+                            break;
+
+                        if (Config.CueOffset != 0 && content.Length.HasValue)
+                            OffsetCue(cue, bpm, content.Length.Value, Config.CueOffset);
+
+                        if (Config.SnapToBar)
+                            SnapToBar(content, cue);
+
+                        var bars = Bars(cue.Time, bpm);
+                        // Find close cues of the same kind we are generating
+                        var closeCues = cues.Where(c => Math.Abs(Bars(c.InMsec ?? 0, bpm) - bars) < Config.MinDistanceBars
+                                                   && ((c.Kind == 0 && !Config.HotCues) || (c.Kind > 0 && Config.HotCues))).ToList();
+
+                        Log.Info("Cue point candidate #{num} is at {time}ms ({bars} bars)", cueNum, cue.Time, bars);
+                        if ((int)cue.Energy > 0)
+                            Log.Info("Energy is {energy}", (int)cue.Energy);
+                        if (cue.Phrase != null)
+                            Log.Info("Phrase is {phrase}", DefaultPhraseNames[cue.Phrase.Kind.Group]);
+
+                        if (!closeCues.Any())
+                        {
+                            cueCandidates.Add(cue);
+                        }
+                        else
+                        {
+                            Log.Info("Ignoring cue point because there is an existing cue point within {bars} bars", Config.MinDistanceBars);
+                            Log.Info("Close cues:");
+                            foreach (var closeCue in closeCues)
+                                Log.Info("ID {cueID} at {time}ms ({bars} bars)", closeCue.ID, closeCue.InMsec, Bars(closeCue.InMsec ?? 0, bpm));
+                        }
+
+                        cueNum++;
+                    }
                 }
 
                 cueNum = 1;
@@ -702,7 +862,7 @@ namespace CueGen
             var uuid = $"{UUIDPrefix}{maxIdHex[0..4]}-{maxIdHex[4..]}";
             (var color, var colorIndex) = GetColor(cue, cueNum);
 
-            if (Config.HotCues)
+            if (cue.Type == CueType.Hot)
             {
                 var maxKind = cues.Select(c => c.Kind ?? 0).DefaultIfEmpty().Max();
                 kind = maxKind + 1;

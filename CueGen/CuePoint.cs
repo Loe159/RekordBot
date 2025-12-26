@@ -11,5 +11,7 @@ namespace CueGen
         public string Name { get; set; }
         public int Energy { get; set; }
         public PhraseEntry Phrase { get; set; }
+        
+        public CueType Type { get; set; }
     }
 }

@@ -182,5 +182,13 @@ namespace CueGen
         /// The cue point offset in beats.
         /// </value>
         public int CueOffset { get; set; } = 0;
+         /// <summary>
+        /// Gets or sets a value indicating whether to create hot cues at phrase starts and memory cues every 32 beats.
+        /// When enabled, creates hot cues (up to 16) at the start of each new phrase and memory cues every 32 beats within phrases.
+        /// </summary>
+        /// <value>
+        ///   <c>true</c> if creating phrase hot cues and memory cues; otherwise, <c>false</c>.
+        /// </value>
+        public bool PhraseHotCuesMemoryCues { get; set; } = false;
     }
 }

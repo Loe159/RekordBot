@@ -81,6 +81,7 @@ namespace CueGen.Console
                         { "li|loopintro=", "Length in beats of active loop intro (default is disabled)", (int v) => program.Config.LoopIntroLength = v },
                         { "lo|loopoutro=", "Length in beats of active loop outro (default is disabled)", (int v) => program.Config.LoopOutroLength = v },
                         { "of|offset=", "Number of beats to offset cue points by, may be negative (default is 0)", (int v) => program.Config.CueOffset = v },
+                        { "phm|phrasehotmemory", "Create hot cues at phrase starts and memory cues every 32 beats (default is disabled)", v => program.Config.PhraseHotCuesMemoryCues = v != null },
                     };
 
                     options.Parse(args);
