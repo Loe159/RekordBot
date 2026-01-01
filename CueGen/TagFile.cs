@@ -37,18 +37,31 @@ namespace CueGen
                     var xiphComment = metaTag.Tags.OfType<TagLib.Ogg.XiphComment>().FirstOrDefault();
                     if (xiphComment != null)
                     {
-                        CuePoints = JsonConvert.DeserializeObject<CuePointsAttachment>(DecodeJson(xiphComment.GetFirstField("CUEPOINTS")));
-                        Key = JsonConvert.DeserializeObject<KeyAttachment>(DecodeJson(xiphComment.GetFirstField("KEY")));
-                        Energy = JsonConvert.DeserializeObject<EnergyAttachment>(DecodeJson(xiphComment.GetFirstField("ENERGY")));
-                        var seratoMarkers = Encoding.ASCII.GetString(Convert.FromBase64String(xiphComment.GetFirstField("SERATO_MARKERS_V2")));
-                        var seratoStart = "application/octet-stream\0\0Serato Markers2\0\u0001\u0001";
-                        if (seratoMarkers.StartsWith(seratoStart))
+                        var cuePointsField = xiphComment.GetFirstField("CUEPOINTS");
+                        if (!string.IsNullOrEmpty(cuePointsField))
+                            CuePoints = JsonConvert.DeserializeObject<CuePointsAttachment>(DecodeJson(cuePointsField));
+
+                        var keyField = xiphComment.GetFirstField("KEY");
+                        if (!string.IsNullOrEmpty(keyField))
+                            Key = JsonConvert.DeserializeObject<KeyAttachment>(DecodeJson(keyField));
+
+                        var energyField = xiphComment.GetFirstField("ENERGY");
+                        if (!string.IsNullOrEmpty(energyField))
+                            Energy = JsonConvert.DeserializeObject<EnergyAttachment>(DecodeJson(energyField));
+
+                        var seratoMarkersField = xiphComment.GetFirstField("SERATO_MARKERS_V2");
+                        if (!string.IsNullOrEmpty(seratoMarkersField))
                         {
-                            seratoMarkers = seratoMarkers[seratoStart.Length..];
-                            var bytes = Convert.FromBase64String(seratoMarkers);
-                            var serializer = new BinarySerializer { Endianness = Endianness.Big };
-                            SeratoMarkers = serializer.Deserialize<SeratoMarkers>(bytes);
-                            SeratoMarkers.Cues = SeratoMarkers.Cues.Where(c => c != null).ToList();
+                            var seratoMarkers = Encoding.ASCII.GetString(Convert.FromBase64String(seratoMarkersField));
+                            var seratoStart = "application/octet-stream\0\0Serato Markers2\0\u0001\u0001";
+                            if (seratoMarkers.StartsWith(seratoStart))
+                            {
+                                seratoMarkers = seratoMarkers[seratoStart.Length..];
+                                var bytes = Convert.FromBase64String(seratoMarkers);
+                                var serializer = new BinarySerializer { Endianness = Endianness.Big };
+                                SeratoMarkers = serializer.Deserialize<SeratoMarkers>(bytes);
+                                SeratoMarkers.Cues = SeratoMarkers.Cues.Where(c => c != null).ToList();
+                            }
                         }
                     }
                 }
