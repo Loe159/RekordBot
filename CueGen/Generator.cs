@@ -204,6 +204,20 @@ namespace CueGen
             long maxMyTagUsn = 0L;
             using var db = new SQLiteConnection(ConnectionString);
 
+            // Initialize stem separator if enabled
+            StemSeparator stemSeparator = null;
+            if (Config.SeparateStems)
+            {
+                if (string.IsNullOrEmpty(Config.StemsOutputDirectory))
+                {
+                    Log.Error("StemsOutputDirectory must be configured when SeparateStems is enabled");
+                    return true;
+                }
+
+                stemSeparator = new StemSeparator(Config.StemsOutputDirectory, Config.DemucsCommand);
+                Log.Info("Stem separation enabled. Output directory: {directory}", Config.StemsOutputDirectory);
+            }
+
             if (Config.MyTagEnergy)
             {
                 try
@@ -233,6 +247,41 @@ namespace CueGen
             foreach (var content in contents)
             {
                 ((IProgress<Status>)Progress).Report(new Status(contents.Count, count, content));
+
+                // Perform stem separation if enabled
+                if (stemSeparator != null && !Config.RemoveOnly)
+                {
+                    try
+                    {
+                        Log.Info("Starting stem separation for {contentID} at {path}", content.ID, content.FolderPath);
+                        var success = stemSeparator.SeparateStems(content.FolderPath, Config.DemucsModel);
+
+                        if (success)
+                        {
+                            var vocalsPath = stemSeparator.GetVocalsPath(content.FolderPath, Config.DemucsModel);
+                            var instrumentalPath = stemSeparator.GetInstrumentalPath(content.FolderPath, Config.DemucsModel);
+                            Log.Info("Stem separation successful. Vocals: {vocals}, Instrumental: {instrumental}",
+                                     vocalsPath, instrumentalPath);
+
+                            // Copy analysis data from parent to stems
+                            Log.Info("Copying analysis data from parent to stems...");
+                            stemSeparator.CopyAnalysisToStems(content.FolderPath, Config.DatabasePath, content.AnalysisDataPath, Config.DemucsModel);
+
+                            // Create Content entries in database for stems
+                            Log.Info("Creating database entries for stems...");
+                            db.RunInTransaction(() => stemSeparator.CreateStemContentEntries(db, content, content.FolderPath, Config.DemucsModel));
+                        }
+                        else
+                        {
+                            Log.Warn("Stem separation failed for {contentID}", content.ID);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Error(ex, "Error during stem separation for {contentID} from {path}", content.ID, content.FolderPath);
+                        error = true;
+                    }
+                }
 
                 if (Config.ColorEnergy)
                 {
