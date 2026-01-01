@@ -82,6 +82,10 @@ namespace CueGen.Console
                         { "lo|loopoutro=", "Length in beats of active loop outro (default is disabled)", (int v) => program.Config.LoopOutroLength = v },
                         { "of|offset=", "Number of beats to offset cue points by, may be negative (default is 0)", (int v) => program.Config.CueOffset = v },
                         { "phm|phrasehotmemory", "Create hot cues at phrase starts and memory cues every 32 beats (default is disabled)", v => program.Config.PhraseHotCuesMemoryCues = v != null },
+                        { "ss|separatestems", "Separate audio tracks into vocals and instrumental stems using Demucs (default is disabled)", v => program.Config.SeparateStems = v != null },
+                        { "so|stemsoutput=", "Output directory for separated stems (required when --separatestems is enabled)", v => program.Config.StemsOutputDirectory = v },
+                        { "dc|demucscommand=", "Path to Demucs executable or command (default is \"python\")", v => program.Config.DemucsCommand = v },
+                        { "dm|demucsmodel=", "Demucs model to use for separation (default is \"htdemucs\")", v => program.Config.DemucsModel = v },
                     };
 
                     options.Parse(args);

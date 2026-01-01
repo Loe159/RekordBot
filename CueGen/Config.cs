@@ -190,5 +190,34 @@ namespace CueGen
         ///   <c>true</c> if creating phrase hot cues and memory cues; otherwise, <c>false</c>.
         /// </value>
         public bool PhraseHotCuesMemoryCues { get; set; } = false;
+        /// <summary>
+        /// Gets or sets a value indicating whether to perform stem separation using Demucs.
+        /// When enabled, audio tracks will be separated into vocals and instrumental stems.
+        /// </summary>
+        /// <value>
+        ///   <c>true</c> if performing stem separation; otherwise, <c>false</c>.
+        /// </value>
+        public bool SeparateStems { get; set; } = false;
+        /// <summary>
+        /// Gets or sets the output directory for separated stems.
+        /// </summary>
+        /// <value>
+        /// The output directory path for stems.
+        /// </value>
+        public string StemsOutputDirectory { get; set; }
+        /// <summary>
+        /// Gets or sets the Demucs command or executable path.
+        /// </summary>
+        /// <value>
+        /// The Demucs command. Default is "python -m demucs".
+        /// </value>
+        public string DemucsCommand { get; set; } = "python";
+        /// <summary>
+        /// Gets or sets the Demucs model to use for separation.
+        /// </summary>
+        /// <value>
+        /// The Demucs model name. Default is "htdemucs".
+        /// </value>
+        public string DemucsModel { get; set; } = "htdemucs";
     }
 }
