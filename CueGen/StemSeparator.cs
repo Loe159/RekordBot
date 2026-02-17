@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using NLog;
@@ -49,6 +51,7 @@ namespace CueGen
             }
 
             var fileName = Path.GetFileNameWithoutExtension(audioFilePath);
+            var fileDirectory = Path.GetDirectoryName(audioFilePath);
 
             // Skip files that are already stems (ending with _instrumental or _vocal)
             if (fileName.EndsWith("_instrumental", StringComparison.OrdinalIgnoreCase) ||
@@ -58,8 +61,8 @@ namespace CueGen
                 return false;
             }
 
-            var vocalsFile = Path.Combine(_outputDirectory, $"{fileName}_vocal.mp3");
-            var instrumentalFile = Path.Combine(_outputDirectory, $"{fileName}_instrumental.mp3");
+            var vocalsFile = Path.Combine(fileDirectory, $"{fileName}_vocal.mp3");
+            var instrumentalFile = Path.Combine(fileDirectory, $"{fileName}_instrumental.mp3");
 
             // Check if stems already exist
             if (File.Exists(vocalsFile) && File.Exists(instrumentalFile))
@@ -278,7 +281,7 @@ namespace CueGen
                     instrumentalFile.Tag.Track = sourceTag.Track;
                     instrumentalFile.Tag.TrackCount = sourceTag.TrackCount;
                     instrumentalFile.Tag.BeatsPerMinute = sourceTag.BeatsPerMinute;
-                    instrumentalFile.Tag.InitialKey = sourceTag.InitialKey;
+                    // instrumentalFile.Tag.InitialKey = sourceTag.InitialKey;
 
                     // Copy artwork
                     if (sourceTag.Pictures != null && sourceTag.Pictures.Length > 0)
@@ -306,7 +309,7 @@ namespace CueGen
         /// <param name="audioFilePath">Path to the original audio file</param>
         /// <param name="model">Demucs model used (default: htdemucs)</param>
         /// <returns>True if metadata was copied successfully, false otherwise</returns>
-        public bool CopyMetadataToExistingStems(string audioFilePath, string model = "htdemucs")
+        public bool CopyMetadataToExistingStems(string audioFilePath)
         {
             if (!File.Exists(audioFilePath))
             {
@@ -314,8 +317,8 @@ namespace CueGen
                 return false;
             }
 
-            var vocalsPath = GetVocalsPath(audioFilePath, model);
-            var instrumentalPath = GetInstrumentalPath(audioFilePath, model);
+            var vocalsPath = GetVocalsPath(audioFilePath);
+            var instrumentalPath = GetInstrumentalPath(audioFilePath);
 
             if (vocalsPath == null || instrumentalPath == null)
             {
@@ -332,12 +335,12 @@ namespace CueGen
         /// Gets the path to the vocals stem for a given audio file
         /// </summary>
         /// <param name="audioFilePath">Original audio file path</param>
-        /// <param name="model">Demucs model used (default: htdemucs)</param>
         /// <returns>Path to vocals file if it exists, null otherwise</returns>
-        public string GetVocalsPath(string audioFilePath, string model = "htdemucs")
+        public string GetVocalsPath(string audioFilePath)
         {
             var fileName = Path.GetFileNameWithoutExtension(audioFilePath);
-            var vocalsPath = Path.Combine(_outputDirectory, $"{fileName}_vocal.mp3");
+            var fileDirectory = Path.GetDirectoryName(audioFilePath);
+            var vocalsPath = Path.Combine(fileDirectory, $"{fileName}_vocal.mp3").Replace('\\', '/');
             return File.Exists(vocalsPath) ? vocalsPath : null;
         }
 
@@ -347,10 +350,11 @@ namespace CueGen
         /// <param name="audioFilePath">Original audio file path</param>
         /// <param name="model">Demucs model used (default: htdemucs)</param>
         /// <returns>Path to instrumental file if it exists, null otherwise</returns>
-        public string GetInstrumentalPath(string audioFilePath, string model = "htdemucs")
+        public string GetInstrumentalPath(string audioFilePath)
         {
             var fileName = Path.GetFileNameWithoutExtension(audioFilePath);
-            var instrumentalPath = Path.Combine(_outputDirectory, $"{fileName}_instrumental.mp3");
+            var fileDirectory = Path.GetDirectoryName(audioFilePath);
+            var instrumentalPath = Path.Combine(fileDirectory, $"{fileName}_instrumental.mp3").Replace('\\', '/');
             return File.Exists(instrumentalPath) ? instrumentalPath : null;
         }
 
@@ -361,49 +365,65 @@ namespace CueGen
         /// <param name="databasePath">Path to the Rekordbox database</param>
         /// <param name="parentAnalysisPath">Analysis path of the parent file (from Content.AnalysisDataPath)</param>
         /// <param name="model">Demucs model used (default: htdemucs)</param>
-        /// <returns>True if copy was successful, false otherwise</returns>
-        public bool CopyAnalysisToStems(string parentAudioPath, string databasePath, string parentAnalysisPath, string model = "htdemucs")
+        /// <returns>Dictionary mapping stem paths to their analysis data paths (relative to share folder), or null if failed</returns>
+        public Dictionary<string, (string Path, bool Copied)> CopyAnalysisToStems(SQLiteConnection db, Content parent, Config config)
         {
-            if (string.IsNullOrEmpty(parentAnalysisPath))
-            {
-                Log.Warn("No parent analysis path provided for {file}", parentAudioPath);
-                return false;
-            }
-
-            var vocalsPath = GetVocalsPath(parentAudioPath, model);
-            var instrumentalPath = GetInstrumentalPath(parentAudioPath, model);
+            var vocalsPath = GetVocalsPath(parent.FolderPath);
+            var instrumentalPath = GetInstrumentalPath(parent.FolderPath);
 
             if (vocalsPath == null || instrumentalPath == null)
             {
-                Log.Warn("Stem files not found for {file}", parentAudioPath);
-                return false;
+                Log.Warn("Stem files not found for {file}", parent.AnalysisDataPath);
+                return null;
             }
 
             try
             {
-                var sharePath = Path.Join(Path.GetDirectoryName(databasePath), "share");
-                var datPath = Path.Join(sharePath, parentAnalysisPath);
+                var sharePath = Path.Join(Path.GetDirectoryName(config.DatabasePath), "share");
+                var datPath = Path.Join(sharePath, parent.AnalysisDataPath);
                 var extPath = datPath.Replace(".DAT", ".EXT", StringComparison.OrdinalIgnoreCase);
 
                 if (!File.Exists(datPath))
                 {
                     Log.Warn("Parent .DAT analysis file not found: {path}", datPath);
-                    return false;
+                    return null;
                 }
+                
 
-                // Copy analysis files next to each stem
+                var result = new Dictionary<string, (string Path, bool Copied)>();
+
+                // Copy analysis files to share folder for each stem
                 var stems = new[] { vocalsPath, instrumentalPath };
                 foreach (var stemPath in stems)
                 {
-                    var stemDir = Path.GetDirectoryName(stemPath);
                     var stemName = Path.GetFileNameWithoutExtension(stemPath);
 
-                    var targetDatPath = Path.Combine(stemDir, stemName + ".DAT");
-                    var targetExtPath = Path.Combine(stemDir, stemName + ".EXT");
+                    // Generate analysis path relative to share folder (using same structure as parent)
+                    var parentDir = Path.GetDirectoryName(parent.AnalysisDataPath);
+                    var stemAnalysisDir = Path.Join(sharePath, parentDir);
 
-                    // Copy .DAT file
-                    File.Copy(datPath, targetDatPath, overwrite: true);
-                    Log.Info("Copied analysis .DAT to {path}", targetDatPath);
+                    // Use parent's directory structure with stem filename
+                    var existingContent = db.Table<Content>().FirstOrDefault(c => c.FolderPath == stemPath);
+                    
+                    var stemAnalysisFileName = $"{stemName}.DAT";
+                    var stemAnalysisPath = existingContent.AnalysisDataPath ?? Path.Join( parentDir ?? "", stemAnalysisFileName);
+                    var targetDatPath = Path.Join(sharePath, stemAnalysisPath);
+                    var targetExtPath = targetDatPath.Replace(".DAT", ".EXT", StringComparison.OrdinalIgnoreCase);
+
+                    // Copy .DAT file and clear beat grid
+                    // File.Copy(datPath, targetDatPath, overwrite: true);
+                    // Log.Info("Copied analysis .DAT to {path}", targetDatPath);
+
+                    // Clear beat grid for stem (will need to be re-analyzed)
+                    try
+                    {
+                         existingContent.SetBeats(parent.GetBeats(config), config);
+                        Log.Info("Cleared beat grid for stem analysis file");
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warn(ex, "Could not clear beat grid for stem analysis file");
+                    }
 
                     // Copy .EXT file if it exists
                     if (File.Exists(extPath))
@@ -411,14 +431,173 @@ namespace CueGen
                         File.Copy(extPath, targetExtPath, overwrite: true);
                         Log.Info("Copied analysis .EXT to {path}", targetExtPath);
                     }
+
+                    // Store the relative path (from share folder) - Always use forward slashes for Rekordbox DB
+                    result[stemPath] = (stemAnalysisPath.Replace('\\', '/'), true);
                 }
 
-                return true;
+                return result;
             }
             catch (Exception ex)
             {
-                Log.Error(ex, "Error copying analysis files for {file}", parentAudioPath);
-                return false;
+                Log.Error(ex, "Error copying analysis files for {file}", parent.AnalysisDataPath);
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Copies cue points from parent content to stem content in the database
+        /// </summary>
+        /// <param name="db">SQLite database connection</param>
+        /// <param name="parentContentId">Parent Content ID</param>
+        /// <param name="stemContentId">Stem Content ID</param>
+        /// <param name="stemContentUUID">Stem Content UUID</param>
+        private List<Cue> CopyCuesToStem(SQLiteConnection db, string parentContentId, string stemContentId, string stemContentUUID)
+        {
+            var createdCues = new List<Cue>();
+            try
+            {
+                // Delete existing cues for the stem to avoid duplicates
+                db.Execute("DELETE FROM djmdCue WHERE ContentID = ?", stemContentId);
+
+                // Get all cues from parent
+                var parentCues = db.Table<Cue>().Where(c => c.ContentID == parentContentId).ToList();
+
+                if (parentCues.Count == 0)
+                {
+                    Log.Debug("No cues found for parent content {contentId}", parentContentId);
+                    return createdCues;
+                }
+
+                Log.Info("Copying {count} cue points from parent to stem...", parentCues.Count);
+
+                // Get max ID for generating new IDs
+                var maxId = db.Table<Cue>().Select(c => c.ID).ToList()
+                    .Select(id => ulong.TryParse(id, out var val) ? val : 0UL)
+                    .DefaultIfEmpty(0UL)
+                    .Max() + 1;
+
+                foreach (var parentCue in parentCues)
+                {
+                    // Create a copy of the cue for the stem
+                    var stemCue = new Cue
+                    {
+                        ID = maxId.ToString(),
+                        ContentID = stemContentId,
+                        InMsec = parentCue.InMsec,
+                        InFrame = parentCue.InFrame,
+                        InMpegFrame = parentCue.InMpegFrame,
+                        InMpegAbs = parentCue.InMpegAbs,
+                        OutMsec = parentCue.OutMsec,
+                        OutFrame = parentCue.OutFrame,
+                        OutMpegFrame = parentCue.OutMpegFrame,
+                        OutMpegAbs = parentCue.OutMpegAbs,
+                        Kind = parentCue.Kind,
+                        Color = parentCue.Color,
+                        ColorTableIndex = parentCue.ColorTableIndex,
+                        ActiveLoop = parentCue.ActiveLoop,
+                        Comment = parentCue.Comment,
+                        BeatLoopSize = parentCue.BeatLoopSize,
+                        CueMicrosec = parentCue.CueMicrosec,
+                        InPointSeekInfo = parentCue.InPointSeekInfo,
+                        OutPointSeekInfo = parentCue.OutPointSeekInfo,
+                        ContentUUID = stemContentUUID,
+                        UUID = Guid.NewGuid().ToString(), // Use new UUID for uniqueness
+                        created_at = DateTime.Now,
+                        updated_at = DateTime.Now,
+                        rb_local_deleted = parentCue.rb_local_deleted,
+                        rb_local_synced = 0
+                    };
+
+                    db.Insert(stemCue);
+                    createdCues.Add(stemCue);
+                    maxId++;
+                }
+
+                Log.Info("Successfully copied {count} cues to stem", parentCues.Count);
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Error copying cues from parent {parentId} to stem {stemId}", parentContentId, stemContentId);
+            }
+            return createdCues;
+        }
+
+        /// <summary>
+        /// Copies content cue entries from parent to stem
+        /// </summary>
+        private void CopyContentCuesToStem(SQLiteConnection db, string stemContentId, List<Cue> stemCues)
+        {
+            try
+            {
+                // Delete existing entries
+                db.Execute("DELETE FROM contentCue WHERE ContentID = ?", stemContentId);
+
+                if (stemCues == null || stemCues.Count == 0) return;
+
+                // Create new ContentCue entry
+                var contentCue = new ContentCue
+                {
+                    ID = Guid.NewGuid().ToString(),
+                    ContentID = stemContentId,
+                    rb_cue_count = stemCues.Count,
+                    rb_local_synced = 0,
+                    rb_local_data_status = 1,
+                    created_at = DateTime.Now,
+                    updated_at = DateTime.Now
+                };
+                contentCue.SetCues(stemCues);
+
+                db.Insert(contentCue);
+                Log.Info("Copied ContentCue entry for stem {stemId}", stemContentId);
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Error copying content cues to stem {stemId}", stemContentId);
+            }
+        }
+
+        /// <summary>
+        /// Copies MyTags from parent to stem
+        /// </summary>
+        private void CopyMyTagsToStem(SQLiteConnection db, string parentContentId, string stemContentId)
+        {
+            try
+            {
+                // Delete existing MyTags for the stem
+                db.Execute("DELETE FROM djmdSongMyTag WHERE ContentID = ?", stemContentId);
+
+                // Get parent MyTags
+                var parentMyTags = db.Table<SongMyTag>().Where(t => t.ContentID == parentContentId).ToList();
+
+                if (parentMyTags.Count == 0) return;
+
+                // Get max ID
+                var maxId = db.Table<SongMyTag>().Select(t => t.ID).ToList()
+                    .Select(id => ulong.TryParse(id, out var val) ? val : 0UL)
+                    .DefaultIfEmpty(0UL)
+                    .Max() + 1;
+
+                foreach (var parentTag in parentMyTags)
+                {
+                    var stemTag = new SongMyTag
+                    {
+                        ID = (maxId++).ToString(),
+                        ContentID = stemContentId,
+                        MyTagID = parentTag.MyTagID,
+                        TrackNo = parentTag.TrackNo,
+                        rb_local_synced = 0,
+                        rb_local_data_status = 1,
+                        created_at = DateTime.Now,
+                        updated_at = DateTime.Now
+                    };
+                    db.Insert(stemTag);
+                }
+                Log.Info("Copied {count} MyTags to stem {stemId}", parentMyTags.Count, stemContentId);
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Error copying MyTags to stem {stemId}", stemContentId);
             }
         }
 
@@ -428,12 +607,13 @@ namespace CueGen
         /// <param name="db">SQLite database connection</param>
         /// <param name="parentContent">Parent Content object</param>
         /// <param name="parentAudioPath">Path to the original audio file</param>
+        /// <param name="analysisPathMap">Dictionary mapping stem paths to their analysis data paths (from CopyAnalysisToStems)</param>
         /// <param name="model">Demucs model used (default: htdemucs)</param>
         /// <returns>True if entries were created successfully, false otherwise</returns>
-        public bool CreateStemContentEntries(SQLiteConnection db, Content parentContent, string parentAudioPath, string model = "htdemucs")
+        public bool UpdateStemContentEntries(SQLiteConnection db, Content parentContent, string parentAudioPath, Dictionary<string, (string Path, bool Copied)> analysisPathMap = null)
         {
-            var vocalsPath = GetVocalsPath(parentAudioPath, model);
-            var instrumentalPath = GetInstrumentalPath(parentAudioPath, model);
+            var vocalsPath = GetVocalsPath(parentAudioPath);
+            var instrumentalPath = GetInstrumentalPath(parentAudioPath);
 
             if (vocalsPath == null || instrumentalPath == null)
             {
@@ -451,52 +631,82 @@ namespace CueGen
 
                 foreach (var stem in stems)
                 {
+                    // Get analysis path for this stem
+                    string analysisPath = null;
+                    bool analysisWasCopied = false;
+                    if (analysisPathMap != null && analysisPathMap.TryGetValue(stem.Path, out var analysisInfo))
+                    {
+                        analysisPath = analysisInfo.Path;
+                        analysisWasCopied = analysisInfo.Copied;
+                    }
+
                     // Check if stem already exists in database
                     var existingContent = db.Table<Content>().Where(c => c.FolderPath == stem.Path).FirstOrDefault();
                     if (existingContent != null)
                     {
-                        Log.Info("Stem already exists in database: {path}", stem.Path);
+                        // If analysis was NOT copied (meaning it already existed), 
+                        // and the stem is already in DB with an analysis path, 
+                        // we skip updating the entry to avoid losing manual analysis info (waveform, etc.)
+                        if (!analysisWasCopied && !string.IsNullOrEmpty(existingContent.AnalysisDataPath))
+                        {
+                            Log.Info("Stem {path} has existing analysis, skipping metadata/cue sync from parent.", stem.Path);
+                            // continue;
+                        }
+
+                        Log.Info("Stem already exists in database: {path}, updating analysis data and metadata...", stem.Path);
+
+                        // Update existing entry with parent's data
+                        existingContent.Title = stem.Title;
+                        existingContent.ArtistID = parentContent.ArtistID;
+                        existingContent.AlbumID = parentContent.AlbumID;
+                        existingContent.GenreID = parentContent.GenreID;
+                        existingContent.BPM = parentContent.BPM;
+                        existingContent.Length = parentContent.Length;
+                        existingContent.BitRate = parentContent.BitRate;
+                        existingContent.BitDepth = parentContent.BitDepth;
+                        existingContent.Commnt = parentContent.Commnt;
+                        existingContent.Rating = parentContent.Rating;
+                        existingContent.KeyID = parentContent.KeyID;
+                        existingContent.ColorID = parentContent.ColorID;
+                        existingContent.RemixerID = parentContent.RemixerID;
+                        existingContent.LabelID = parentContent.LabelID;
+                        existingContent.ComposerID = parentContent.ComposerID;
+                        existingContent.ReleaseYear = parentContent.ReleaseYear;
+                        existingContent.ReleaseDate = parentContent.ReleaseDate;
+                        existingContent.StockDate = parentContent.StockDate;
+                        existingContent.OrgArtistID = parentContent.OrgArtistID;
+                        existingContent.MasterDBID = parentContent.MasterDBID;
+                        existingContent.MasterSongID = parentContent.MasterSongID;
+                        existingContent.DiscNo = parentContent.DiscNo;
+                        existingContent.Subtitle = parentContent.Subtitle;
+                        existingContent.SampleRate = parentContent.SampleRate;
+                        existingContent.AnalysisDataPath = parentContent.AnalysisDataPath;
+                        existingContent.Analysed = 1;
+                        existingContent.AnalysisUpdated = parentContent.AnalysisUpdated;
+                        existingContent.CueUpdated = parentContent.CueUpdated;
+                        existingContent.TrackInfoUpdated = parentContent.TrackInfoUpdated;
+                        existingContent.updated_at = DateTime.Now;
+                        existingContent.rb_local_synced = 0;
+                        existingContent.rb_local_data_status = 1;
+                        existingContent.DeviceID = parentContent.DeviceID;
+                        existingContent.SrcID = parentContent.SrcID;
+                        existingContent.SrcTitle = parentContent.SrcTitle;
+                        existingContent.SrcArtistName = parentContent.SrcArtistName;
+                        existingContent.SrcAlbumName = parentContent.SrcAlbumName;
+                        existingContent.SrcLength = parentContent.SrcLength;
+
+                        db.Update(existingContent);
+                        Log.Info("Updated Content entry for stem: {title}", stem.Title);
+
+                        // Copy cues from parent to existing stem
+                        var stemCues = CopyCuesToStem(db, parentContent.ID, existingContent.ID, existingContent.UUID);
+                        CopyContentCuesToStem(db, existingContent.ID, stemCues);
+                        CopyMyTagsToStem(db, parentContent.ID, existingContent.ID);
+
                         continue;
                     }
-
-                    // Create new Content entry for stem
-                    var stemContent = new Content
-                    {
-                        ID = GenerateContentId(stem.Path),
-                        FolderPath = stem.Path,
-                        FileNameL = Path.GetFileName(stem.Path),
-                        FileNameS = Path.GetFileName(stem.Path),
-                        Title = stem.Title,
-                        ArtistID = parentContent.ArtistID,
-                        AlbumID = parentContent.AlbumID,
-                        GenreID = parentContent.GenreID,
-                        BPM = parentContent.BPM,
-                        Length = parentContent.Length,
-                        BitRate = parentContent.BitRate,
-                        BitDepth = parentContent.BitDepth,
-                        FileType = 1, // MP3 file type
-                        KeyID = parentContent.KeyID,
-                        ColorID = parentContent.ColorID,
-                        RemixerID = parentContent.RemixerID,
-                        LabelID = parentContent.LabelID,
-                        ComposerID = parentContent.ComposerID,
-                        SampleRate = parentContent.SampleRate,
-                        FileSize = (int?)new FileInfo(stem.Path).Length,
-                        Analysed = 0,
-                        created_at = DateTime.Now,
-                        updated_at = DateTime.Now,
-                        rb_file_id = Guid.NewGuid().ToString(),
-                        DeviceID = parentContent.DeviceID,
-                        rb_LocalFolderPath = stem.Path,
-                        SrcID = parentContent.SrcID,
-                        SrcTitle = parentContent.SrcTitle,
-                        SrcArtistName = parentContent.SrcArtistName,
-                        SrcAlbumName = parentContent.SrcAlbumName,
-                        SrcLength = parentContent.SrcLength
-                    };
-
-                    db.Insert(stemContent);
-                    Log.Info("Created Content entry for stem: {title} at {path}", stem.Title, stem.Path);
+                    
+                    Log.Info("No existing analysis entry for stem: {title} at {path}. Please analyze it in Rekordbox and try again", stem.Title, stem.Path);
                 }
 
                 return true;

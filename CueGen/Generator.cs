@@ -247,7 +247,7 @@ namespace CueGen
             foreach (var content in contents)
             {
                 ((IProgress<Status>)Progress).Report(new Status(contents.Count, count, content));
-
+                
                 // Perform stem separation if enabled
                 if (stemSeparator != null && !Config.RemoveOnly)
                 {
@@ -258,18 +258,19 @@ namespace CueGen
 
                         if (success)
                         {
-                            var vocalsPath = stemSeparator.GetVocalsPath(content.FolderPath, Config.DemucsModel);
-                            var instrumentalPath = stemSeparator.GetInstrumentalPath(content.FolderPath, Config.DemucsModel);
+                            var vocalsPath = stemSeparator.GetVocalsPath(content.FolderPath);
+                            var instrumentalPath = stemSeparator.GetInstrumentalPath(content.FolderPath);
                             Log.Info("Stem separation successful. Vocals: {vocals}, Instrumental: {instrumental}",
                                      vocalsPath, instrumentalPath);
 
-                            // Copy analysis data from parent to stems
-                            Log.Info("Copying analysis data from parent to stems...");
-                            stemSeparator.CopyAnalysisToStems(content.FolderPath, Config.DatabasePath, content.AnalysisDataPath, Config.DemucsModel);
 
                             // Create Content entries in database for stems
-                            Log.Info("Creating database entries for stems...");
-                            db.RunInTransaction(() => stemSeparator.CreateStemContentEntries(db, content, content.FolderPath, Config.DemucsModel));
+                            Log.Info("Updating database entries for stems...");
+                            db.RunInTransaction(() => stemSeparator.UpdateStemContentEntries(db, content, content.FolderPath));
+
+                            // Copy analysis data from parent to stems
+                            Log.Info("Copying analysis data from parent to stems...");
+                            stemSeparator.CopyAnalysisToStems(db, content, Config);
                         }
                         else
                         {
@@ -283,6 +284,7 @@ namespace CueGen
                     }
                 }
 
+                continue;
                 if (Config.ColorEnergy)
                 {
                     try
@@ -931,6 +933,10 @@ namespace CueGen
                 UUID = uuid,
                 created_at = date,
                 updated_at = date,
+                rb_data_status = 0,
+                rb_local_data_status = 0,
+                rb_local_deleted = 0,
+                rb_local_synced = 0
             };
 
             if (!string.IsNullOrEmpty(Config.Comment) && cue.Energy > 0)

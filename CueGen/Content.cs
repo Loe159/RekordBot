@@ -1,4 +1,5 @@
-﻿using CueGen.Analysis;
+﻿using BinarySerialization;
+using CueGen.Analysis;
 using NLog;
 using SQLite;
 using System;
@@ -94,11 +95,11 @@ namespace CueGen
         public string SrcAlbumName { get; set; }
         public int? SrcLength { get; set; }
 
-        [Ignore]
+        [SQLite.Ignore]
         public List<ContentCue> ContentCues { get; private set; } = new();
-        [Ignore]
+        [SQLite.Ignore]
         public List<Cue> Cues { get; private set; } = new();
-        [Ignore]
+        [SQLite.Ignore]
         public List<SongMyTag> MyTags { get; private set; } = new();
 
         private Anlz dat;
@@ -172,6 +173,61 @@ namespace CueGen
             }
 
             return beats;
+        }
+
+        public void SetBeats(IList<BeatGridEntry> newBeats, Config config)
+        {
+            var datAnlz = GetAnlz(AnalysisKind.Dat, config);
+
+            if (datAnlz == null)
+            {
+                Log.Warn("Cannot set beats for {contentID}: no analysis file", ID);
+                return;
+            }
+
+            if (datAnlz.Sections == null)
+                datAnlz.Sections = new List<Section>();
+
+            var beatGridSection = datAnlz.Sections.FirstOrDefault(s => s.Tag is BeatGridTag);
+
+            if (beatGridSection != null)
+            {
+                ((BeatGridTag)beatGridSection.Tag).Beats = new List<BeatGridEntry>(newBeats);
+            }
+            else
+            {
+                var newBeatGridTag = new BeatGridTag { Beats = new List<BeatGridEntry>(newBeats) };
+                datAnlz.Sections.Add(new Section { Magic = "PQTZ", Tag = newBeatGridTag });
+            }
+
+            beats = new List<BeatGridEntry>(newBeats);
+
+            var analysisDataPath = AnalysisDataPath;
+            if (string.IsNullOrEmpty(analysisDataPath))
+            {
+                Log.Warn("Cannot save beats for {contentID}: no analysis file path", ID);
+                return;
+            }
+
+            var path = Path.Join(Path.GetDirectoryName(config.DatabasePath), "share", analysisDataPath);
+
+            if (!File.Exists(path))
+            {
+                var rbPath = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ?
+                    Environment.ExpandEnvironmentVariables(@"%AppData%\Pioneer\rekordbox\share") :
+                    Environment.ExpandEnvironmentVariables("%HOME%/Library/Pioneer/rekordbox/share");
+
+                path = Path.Join(rbPath, analysisDataPath);
+            }
+
+            Log.Info("Saving beats for {contentID} to {path}", ID, path);
+
+            var serializer = new BinarySerializer { Endianness = Endianness.Big };
+            using (var stream = new MemoryStream())
+            {
+                serializer.Serialize(stream, datAnlz);
+                File.WriteAllBytes(path, stream.ToArray());
+            }
         }
 
         private TagFile tag;
