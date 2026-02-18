@@ -688,7 +688,7 @@ namespace CueGen
                         existingContent.DiscNo = parentContent.DiscNo;
                         existingContent.Subtitle = parentContent.Subtitle;
                         existingContent.SampleRate = parentContent.SampleRate;
-                        existingContent.AnalysisDataPath = parentContent.AnalysisDataPath;
+                        existingContent.AnalysisDataPath = analysisPath;
                         existingContent.Analysed = 1;
                         existingContent.AnalysisUpdated = parentContent.AnalysisUpdated;
                         existingContent.CueUpdated = parentContent.CueUpdated;
