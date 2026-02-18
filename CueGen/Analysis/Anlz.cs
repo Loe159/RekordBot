@@ -16,8 +16,7 @@ namespace CueGen.Analysis
         /// The magic value.
         /// </value>
         [FieldOrder(0)]
-        [FieldLength(4)]
-        public string Magic { get; set; }
+        public AnlzMagic Magic { get; set; }
 
         /// <summary>
         /// Gets or sets the length of the header in bytes.
@@ -56,7 +55,7 @@ namespace CueGen.Analysis
         /// The sections.
         /// </value>
         [FieldOrder(4)]
-        public List<Section> Sections { get; set; }
+        public List<AnlzSection> Sections { get; set; }
 
         /// <summary>
         /// Deserializes the specified bytes.
@@ -68,6 +67,41 @@ namespace CueGen.Analysis
             var serializer = new BinarySerializer { Endianness = Endianness.Big };
             var anlz = serializer.Deserialize<Anlz>(bytes);
             return anlz;
+        }
+
+        /// <summary>
+        /// Serializes the specified instance to bytes.
+        /// </summary>
+        /// <returns>The serialized bytes.</returns>
+        public byte[] Serialize()
+        {
+            var serializer = new BinarySerializer { Endianness = Endianness.Big };
+            
+            // First pass to get the correct lengths
+            using (var stream = new System.IO.MemoryStream())
+            {
+                serializer.Serialize(stream, this);
+                var bytes = stream.ToArray();
+                
+                // Update LenFile (offset 8)
+                uint len = (uint)bytes.Length;
+                byte[] lenBytes = BitConverter.GetBytes(len);
+                if (BitConverter.IsLittleEndian) Array.Reverse(lenBytes);
+                Array.Copy(lenBytes, 0, bytes, 8, 4);
+                
+                return bytes;
+            }
+        }
+
+        public Anlz Clone()
+        {
+            return Deserialize(Serialize());
+        }
+
+        public void FilterWaveforms()
+        {
+            if (Sections == null) return;
+            Sections.RemoveAll(s => s.Magic.ToString().StartsWith("PW"));
         }
     }
 }
