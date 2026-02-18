@@ -423,7 +423,7 @@ namespace CueGen
         {
             var extAnlz = content.GetAnlz(AnalysisKind.Ext, Config);
             if (extAnlz == null || extAnlz.Sections == null) return new();
-            var phraseTag = extAnlz.Sections.Select(s => s.Tag).OfType<PhraseTag>().FirstOrDefault();
+            var phraseTag = extAnlz.Sections.Select(s => s.Content).OfType<PhraseSection>().FirstOrDefault();
             var phrases = phraseTag?.Phrases;
             if (phrases == null || !phrases.Any()) return new();
 
@@ -480,8 +480,8 @@ namespace CueGen
             if (extAnlz?.Sections == null) return new();
 
             var phraseTag = extAnlz.Sections
-                .Select(s => s.Tag)
-                .OfType<PhraseTag>()
+                .Select(s => s.Content)
+                .OfType<PhraseSection>()
                 .FirstOrDefault();
 
             if (phraseTag?.Phrases == null || !phraseTag.Phrases.Any())

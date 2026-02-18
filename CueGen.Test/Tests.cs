@@ -149,7 +149,7 @@ namespace CueGen.Test
 
             Assert.AreEqual(7, anlz.Sections.Count);
 
-            var beatGridTag = anlz.Sections[2].Tag as BeatGridTag;
+            var beatGridTag = anlz.Sections[2].Content as BeatGridSection;
 
             Assert.NotNull(beatGridTag);
             Assert.AreEqual(980, beatGridTag.Beats.Count);
@@ -164,7 +164,7 @@ namespace CueGen.Test
 
             Assert.AreEqual(10, anlz.Sections.Count);
 
-            var phraseTag = anlz.Sections.Last().Tag as PhraseTag;
+            var phraseTag = anlz.Sections.Last().Content as PhraseSection;
 
             Assert.NotNull(phraseTag);
             Assert.AreEqual(22, phraseTag.Phrases.Count);

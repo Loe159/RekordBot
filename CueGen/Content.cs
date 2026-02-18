@@ -158,24 +158,24 @@ namespace CueGen
             return anlz;
         }
 
-        private List<BeatGridEntry> beats;
+        private List<AnlzBeat> beats;
 
-        public IList<BeatGridEntry> GetBeats(Config config)
+        public IList<AnlzBeat> GetBeats(Config config)
         {
             if (beats == null)
             {
                 var datAnlz = GetAnlz(AnalysisKind.Dat, config);
 
                 if (datAnlz == null || datAnlz.Sections == null)
-                    beats = new List<BeatGridEntry>();
+                    beats = new List<AnlzBeat>();
                 else
-                    beats = datAnlz.Sections.Select(s => s.Tag).OfType<BeatGridTag>().FirstOrDefault()?.Beats ?? new List<BeatGridEntry>();
+                    beats = datAnlz.Sections.Select(s => s.Content).OfType<BeatGridSection>().FirstOrDefault()?.Beats ?? new List<AnlzBeat>();
             }
 
             return beats;
         }
 
-        public void SetBeats(IList<BeatGridEntry> newBeats, Config config)
+        public void SetBeats(IList<AnlzBeat> newBeats, Config config)
         {
             var datAnlz = GetAnlz(AnalysisKind.Dat, config);
 
@@ -186,21 +186,21 @@ namespace CueGen
             }
 
             if (datAnlz.Sections == null)
-                datAnlz.Sections = new List<Section>();
+                datAnlz.Sections = new List<AnlzSection>();
 
-            var beatGridSection = datAnlz.Sections.FirstOrDefault(s => s.Tag is BeatGridTag);
+            var beatGridSection = datAnlz.Sections.FirstOrDefault(s => s.Content is BeatGridSection);
 
             if (beatGridSection != null)
             {
-                ((BeatGridTag)beatGridSection.Tag).Beats = new List<BeatGridEntry>(newBeats);
+                ((BeatGridSection)beatGridSection.Content).Beats = new List<AnlzBeat>(newBeats);
             }
             else
             {
-                var newBeatGridTag = new BeatGridTag { Beats = new List<BeatGridEntry>(newBeats) };
-                datAnlz.Sections.Add(new Section { Magic = "PQTZ", Tag = newBeatGridTag });
+                var newBeatGridSection = new BeatGridSection { Beats = new List<AnlzBeat>(newBeats) };
+                datAnlz.Sections.Add(new AnlzSection { Magic = AnlzMagic.PQTZ, Content = newBeatGridSection });
             }
 
-            beats = new List<BeatGridEntry>(newBeats);
+            beats = new List<AnlzBeat>(newBeats);
 
             var analysisDataPath = AnalysisDataPath;
             if (string.IsNullOrEmpty(analysisDataPath))

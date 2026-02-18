@@ -444,9 +444,9 @@ namespace CueGen.Analysis
         /// </value>
         [FieldOrder(2)]
         [FieldLength(2)]
-        [Subtype(nameof(PhraseTag.Mood), Mood.Low, typeof(PhraseLow), RelativeSourceMode = RelativeSourceMode.FindAncestor, AncestorType = typeof(PhraseTag))]
-        [Subtype(nameof(PhraseTag.Mood), Mood.Mid, typeof(PhraseMid), RelativeSourceMode = RelativeSourceMode.FindAncestor, AncestorType = typeof(PhraseTag))]
-        [Subtype(nameof(PhraseTag.Mood), Mood.High, typeof(PhraseHigh), RelativeSourceMode = RelativeSourceMode.FindAncestor, AncestorType = typeof(PhraseTag))]
+        [Subtype(nameof(PhraseSection.Mood), Mood.Low, typeof(PhraseLow), RelativeSourceMode = RelativeSourceMode.FindAncestor, AncestorType = typeof(PhraseSection))]
+        [Subtype(nameof(PhraseSection.Mood), Mood.Mid, typeof(PhraseMid), RelativeSourceMode = RelativeSourceMode.FindAncestor, AncestorType = typeof(PhraseSection))]
+        [Subtype(nameof(PhraseSection.Mood), Mood.High, typeof(PhraseHigh), RelativeSourceMode = RelativeSourceMode.FindAncestor, AncestorType = typeof(PhraseSection))]
         public PhraseKind Kind { get; set; }
 
         /// <summary>
