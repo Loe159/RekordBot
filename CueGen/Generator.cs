@@ -264,13 +264,13 @@ namespace CueGen
                                      vocalsPath, instrumentalPath);
 
 
-                            // Create Content entries in database for stems
-                            Log.Info("Updating database entries for stems...");
-                            db.RunInTransaction(() => stemSeparator.UpdateStemContentEntries(db, content, content.FolderPath));
-
                             // Copy analysis data from parent to stems
                             Log.Info("Copying analysis data from parent to stems...");
-                            stemSeparator.CopyAnalysisToStems(db, content, Config);
+                            var analysisMap = stemSeparator.CopyAnalysisToStems(db, content, Config);
+
+                            // Create Content entries in database for stems
+                            Log.Info("Updating database entries for stems...");
+                            db.RunInTransaction(() => stemSeparator.UpdateStemContentEntries(db, content, content.FolderPath, analysisMap));
                         }
                         else
                         {

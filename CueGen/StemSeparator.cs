@@ -406,30 +406,38 @@ namespace CueGen
                     var existingContent = db.Table<Content>().FirstOrDefault(c => c.FolderPath == stemPath);
                     
                     var stemAnalysisFileName = $"{stemName}.DAT";
-                    var stemAnalysisPath = existingContent.AnalysisDataPath ?? Path.Join( parentDir ?? "", stemAnalysisFileName);
+                    var stemAnalysisPath = existingContent?.AnalysisDataPath ?? Path.Join( parentDir ?? "", stemAnalysisFileName);
                     var targetDatPath = Path.Join(sharePath, stemAnalysisPath);
                     var targetExtPath = targetDatPath.Replace(".DAT", ".EXT", StringComparison.OrdinalIgnoreCase);
 
-                    // Copy .DAT file and clear beat grid
-                    // File.Copy(datPath, targetDatPath, overwrite: true);
-                    // Log.Info("Copied analysis .DAT to {path}", targetDatPath);
-
-                    // Clear beat grid for stem (will need to be re-analyzed)
+                    // Copy .DAT and .EXT files, filtering out waveforms
                     try
                     {
-                         existingContent.SetBeats(parent.GetBeats(config), config);
-                        Log.Info("Cleared beat grid for stem analysis file");
+                        var parentDatAnlz = parent.GetAnlz(AnalysisKind.Dat, config);
+                        if (parentDatAnlz != null)
+                        {
+                            var stemDatAnlz = parentDatAnlz.Clone();
+                            stemDatAnlz.FilterWaveforms();
+                            var bytes = stemDatAnlz.Serialize();
+                            Directory.CreateDirectory(Path.GetDirectoryName(targetDatPath));
+                            File.WriteAllBytes(targetDatPath, bytes);
+                            Log.Info("Copied and filtered analysis .DAT to {path}", targetDatPath);
+                        }
+
+                        var parentExtAnlz = parent.GetAnlz(AnalysisKind.Ext, config);
+                        if (parentExtAnlz != null)
+                        {
+                            var stemExtAnlz = parentExtAnlz.Clone();
+                            stemExtAnlz.FilterWaveforms();
+                            var bytes = stemExtAnlz.Serialize();
+                            Directory.CreateDirectory(Path.GetDirectoryName(targetExtPath));
+                            File.WriteAllBytes(targetExtPath, bytes);
+                            Log.Info("Copied and filtered analysis .EXT to {path}", targetExtPath);
+                        }
                     }
                     catch (Exception ex)
                     {
-                        Log.Warn(ex, "Could not clear beat grid for stem analysis file");
-                    }
-
-                    // Copy .EXT file if it exists
-                    if (File.Exists(extPath))
-                    {
-                        File.Copy(extPath, targetExtPath, overwrite: true);
-                        Log.Info("Copied analysis .EXT to {path}", targetExtPath);
+                        Log.Warn(ex, "Could not copy and filter analysis files for stem: {path}", stemPath);
                     }
 
                     // Store the relative path (from share folder) - Always use forward slashes for Rekordbox DB
