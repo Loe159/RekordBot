@@ -219,5 +219,17 @@ namespace CueGen
         /// The Demucs model name. Default is "htdemucs".
         /// </value>
         public string DemucsModel { get; set; } = "htdemucs";
+        /// <summary>
+        /// Gets or sets the Soundcharts App ID.
+        /// </summary>
+        public string SoundchartsAppId { get; set; } = "LLAST-NAME-API4_81E7B587";
+        /// <summary>
+        /// Gets or sets the Soundcharts API Key.
+        /// </summary>
+        public string SoundchartsApiKey { get; set; } = "4c6c33f5aa9b009c";
+        /// <summary>
+        /// When enabled, fetches and updates track metadata from Soundcharts.
+        /// </summary>
+        public bool UpdateFromSoundcharts { get; set; } = false;
     }
 }

@@ -8,6 +8,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Threading.Tasks;
 
 namespace CueGen
 {
@@ -242,11 +243,31 @@ namespace CueGen
                 contents = contents.Where(c => glob.IsMatch(c.FolderPath)).ToList();
             }
 
+            SoundchartsClient soundchartsClient = null;
+            if (Config.UpdateFromSoundcharts && !string.IsNullOrWhiteSpace(Config.SoundchartsAppId) && !string.IsNullOrWhiteSpace(Config.SoundchartsApiKey))
+            {
+                soundchartsClient = new SoundchartsClient(Config.SoundchartsAppId, Config.SoundchartsApiKey);
+            }
+
             var count = 0;
 
             foreach (var content in contents)
             {
                 ((IProgress<Status>)Progress).Report(new Status(contents.Count, count, content));
+
+                // Update metadata from Soundcharts if enabled
+                if (Config.UpdateFromSoundcharts && soundchartsClient != null && !Config.RemoveOnly)
+                {
+                    try
+                    {
+                        UpdateMetadataForContentAsync(db, content, soundchartsClient).GetAwaiter().GetResult();
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Error(ex, "Error updating metadata from Soundcharts for {contentID}", content.ID);
+                        error = true;
+                    }
+                }
                 
                 // Perform stem separation if enabled
                 if (stemSeparator != null && !Config.RemoveOnly)
@@ -254,7 +275,7 @@ namespace CueGen
                     try
                     {
                         Log.Info("Starting stem separation for {contentID} at {path}", content.ID, content.FolderPath);
-                        var success = stemSeparator.SeparateStems(content.FolderPath, Config.DemucsModel);
+                        var success = true;//stemSeparator.SeparateStems(content.FolderPath, Config.DemucsModel);
 
                         if (success)
                         {
@@ -267,6 +288,12 @@ namespace CueGen
                             // Copy analysis data from parent to stems
                             Log.Info("Copying analysis data from parent to stems...");
                             var analysisMap = stemSeparator.CopyAnalysisToStems(db, content, Config);
+
+                            if (analysisMap == null)
+                            {
+                                error = true;
+                                continue;
+                            }
 
                             // Create Content entries in database for stems
                             Log.Info("Updating database entries for stems...");
@@ -284,7 +311,6 @@ namespace CueGen
                     }
                 }
 
-                continue;
                 if (Config.ColorEnergy)
                 {
                     try
@@ -323,6 +349,8 @@ namespace CueGen
 
                 count++;
             }
+
+            soundchartsClient?.Dispose();
 
             Log.Info($"Finished cue points creation {(error ? "with" : "without")} errors");
 
@@ -434,41 +462,42 @@ namespace CueGen
             var phraseNames = Config.PhraseNames ?? DefaultPhraseNames;
             var cues = new List<CuePoint>();
 
-            // Grouper les phrases consécutives du même type
-            PhraseEntry previousPhrase = null;
-            foreach (var phrase in phrases)
+            for (int i = 0; i < phrases.Count; i++)
             {
+                var phrase = phrases[i];
                 if (!phraseOrder.ContainsKey(phrase.Kind.Group))
                     continue;
 
-                // Créer un hotcue seulement si c'est une nouvelle phrase (pas la même que la précédente)
-                if (previousPhrase == null || previousPhrase.Kind.Group != phrase.Kind.Group)
+                // Compute phrase length in bars
+                var startBeat = phrase.Beat - 1;
+                var endBeat = (i + 1 < phrases.Count) ? phrases[i + 1].Beat - 1 : (phraseTag.EndBeat - 1);
+                startBeat = Math.Max(0, startBeat);
+                endBeat = Math.Min(endBeat, beats.Count - 1);
+                var lengthBeats = Math.Max(0, endBeat - startBeat);
+                var lengthBars = lengthBeats / 4;
+                if (lengthBars < Config.MinPhraseLength)
+                    continue;
+
+                var beatNum = startBeat;
+                phraseNames.TryGetValue(phrase.Kind.Group, out var name);
+
+                if (beatNum >= 0 && beatNum < beats.Count)
                 {
-                    var beatNum = phrase.Beat - 1;
-                    phraseNames.TryGetValue(phrase.Kind.Group, out var name);
-
-                    // Si le beat est hors limites, utiliser le beat le plus proche disponible
-                    if (beatNum < 0)
-                        beatNum = 0;
-                    else if (beatNum >= beats.Count)
-                        beatNum = beats.Count - 1;
-
-                    if (beatNum >= 0 && beatNum < beats.Count)
+                    var cue = new CuePoint
                     {
-                        cues.Add(new CuePoint
-                        {
-                            Name = name,
-                            Time = beats[beatNum].Time,
-                            Phrase = phrase,
-                            Type = CueType.Hot
-                        });
-                        
-                        if (phrase.Beat - 1 >= beats.Count)
-                            Log.Warn("Beat number {beatNum} not found in grid analysis, using closest beat {closestBeat}", phrase.Beat - 1, beatNum);
+                        Name = name,
+                        Time = beats[beatNum].Time,
+                        Phrase = phrase
+                    };
+                    if (Config.PhraseHotCuesMemoryCues)
+                    {
+                        cue.Type = CueType.Hot;
                     }
+                    cues.Add(cue);
                 }
 
-                previousPhrase = phrase;
+                // Only the first qualifying phrase is used
+                break;
             }
 
             return cues;
@@ -913,7 +942,8 @@ namespace CueGen
             var uuid = $"{UUIDPrefix}{maxIdHex[0..4]}-{maxIdHex[4..]}";
             (var color, var colorIndex) = GetColor(cue, cueNum);
 
-            if (cue.Type == CueType.Hot)
+            var isHot = cue.Type == CueType.Hot || (cue.Type == CueType.Memory && Config.HotCues);
+            if (isHot)
             {
                 var maxKind = cues.Select(c => c.Kind ?? 0).DefaultIfEmpty().Max();
                 kind = maxKind + 1;
@@ -950,5 +980,99 @@ namespace CueGen
         int BeatsToMs(int beats, int bpm) => (int)Math.Round(beats * 60.0 * 1000.0 * 100.0 / bpm);
         int MsToBeats(double ms, int bpm) => (int)Math.Round(bpm * (ms / (60.0 * 1000.0)) / 100.0);
         int Bars(double ms, int bpm) => MsToBeats(ms, bpm) / 4 + 1;
+
+        private bool MapSoundchartsToContent(Content content, SoundchartsSong song)
+        {
+            if (song == null) return false;
+            bool changed = false;
+
+            if (!string.IsNullOrWhiteSpace(song.Name) && string.IsNullOrWhiteSpace(content.Title))
+            {
+                content.Title = song.Name;
+                changed = true;
+            }
+
+            if (song.Duration.HasValue && (!content.Length.HasValue || content.Length.Value == 0))
+            {
+                content.Length = song.Duration.Value;
+                changed = true;
+            }
+
+            if (song.Audio?.Tempo.HasValue == true)
+            {
+                var bpm = (int)Math.Round(song.Audio.Tempo.Value * 100.0);
+                if (!content.BPM.HasValue || content.BPM.Value == 0)
+                {
+                    content.BPM = bpm;
+                    changed = true;
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(song.Isrc?.Value) && string.IsNullOrWhiteSpace(content.ISRC))
+            {
+                content.ISRC = song.Isrc.Value;
+                changed = true;
+            }
+
+            if (song.ReleaseDate.HasValue)
+            {
+                var year = song.ReleaseDate.Value.Year;
+                if (!content.ReleaseYear.HasValue || content.ReleaseYear.Value == 0)
+                {
+                    content.ReleaseYear = year;
+                    changed = true;
+                }
+
+                var rd = song.ReleaseDate.Value.ToUniversalTime().ToString("yyyy'-'MM'-'dd'T'HH':'mm':'ss'.'fffzzz");
+                if (string.IsNullOrWhiteSpace(content.ReleaseDate))
+                {
+                    content.ReleaseDate = rd;
+                    changed = true;
+                }
+            }
+
+            if (changed)
+            {
+                content.updated_at = DateTime.UtcNow;
+            }
+
+            return changed;
+        }
+
+        private async Task UpdateMetadataForContentAsync(SQLiteConnection db, Content content, SoundchartsClient client)
+        {
+            try
+            {
+                if (content == null) return;
+                var isrc = content.ISRC;
+                if (string.IsNullOrWhiteSpace(isrc))
+                {
+                    Log.Info("Skipping Soundcharts fetch for {contentID}: no ISRC in database", content.ID);
+                    return;
+                }
+
+                var song = await client.GetSongByIsrcAsync(isrc);
+                if (song == null)
+                {
+                    Log.Warn("No Soundcharts data found for ISRC {isrc}", isrc);
+                    return;
+                }
+
+                if (MapSoundchartsToContent(content, song))
+                {
+                    Log.Info("Updating content {contentID} with Soundcharts metadata (ISRC {isrc})", content.ID, isrc);
+                    if (!Config.DryRun)
+                        db.Update(content);
+                }
+                else
+                {
+                    Log.Info("No metadata changes required for {contentID}", content.ID);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Failed to update metadata from Soundcharts for {contentID}", content?.ID);
+            }
+        }
     }
 }

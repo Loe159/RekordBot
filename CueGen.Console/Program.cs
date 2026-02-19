@@ -86,6 +86,9 @@ namespace CueGen.Console
                         { "so|stemsoutput=", "Output directory for separated stems (required when --separatestems is enabled)", v => program.Config.StemsOutputDirectory = v },
                         { "dc|demucscommand=", "Path to Demucs executable or command (default is \"python\")", v => program.Config.DemucsCommand = v },
                         { "dm|demucsmodel=", "Demucs model to use for separation (default is \"htdemucs\")", v => program.Config.DemucsModel = v },
+                        { "sc|soundcharts", "Fetch and update track metadata from Soundcharts (default is disabled)", v => program.Config.UpdateFromSoundcharts = v != null },
+                        { "scappid=", "Soundcharts App ID (overrides default)", v => program.Config.SoundchartsAppId = v },
+                        { "scapikey=", "Soundcharts API Key (overrides default)", v => program.Config.SoundchartsApiKey = v },
                     };
 
                     options.Parse(args);

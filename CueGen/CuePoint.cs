@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
+using Newtonsoft.Json;
 
 namespace CueGen
 {
@@ -12,6 +13,7 @@ namespace CueGen
         public int Energy { get; set; }
         public PhraseEntry Phrase { get; set; }
         
+        [JsonIgnore]
         public CueType Type { get; set; }
     }
 }
