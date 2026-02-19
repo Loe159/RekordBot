@@ -396,43 +396,54 @@ namespace CueGen
                 var stems = new[] { vocalsPath, instrumentalPath };
                 foreach (var stemPath in stems)
                 {
-                    var stemName = Path.GetFileNameWithoutExtension(stemPath);
-
-                    // Generate analysis path relative to share folder (using same structure as parent)
-                    var parentDir = Path.GetDirectoryName(parent.AnalysisDataPath);
-                    var stemAnalysisDir = Path.Join(sharePath, parentDir);
-
                     // Use parent's directory structure with stem filename
                     var existingContent = db.Table<Content>().FirstOrDefault(c => c.FolderPath == stemPath);
                     
-                    var stemAnalysisFileName = $"{stemName}.DAT";
-                    var stemAnalysisPath = existingContent?.AnalysisDataPath ?? Path.Join( parentDir ?? "", stemAnalysisFileName);
+                    if (existingContent == null || existingContent.Analysed == 0 || string.IsNullOrEmpty(existingContent.AnalysisDataPath))
+                    {
+                        Log.Error("The stem {stemPath} is not analyzed in rekordbox. Please analyze the stems in rekordbox and restart the program.", stemPath);
+                        return null;
+                    }
+
+                    var stemAnalysisPath = existingContent.AnalysisDataPath;
                     var targetDatPath = Path.Join(sharePath, stemAnalysisPath);
                     var targetExtPath = targetDatPath.Replace(".DAT", ".EXT", StringComparison.OrdinalIgnoreCase);
 
-                    // Copy .DAT and .EXT files, filtering out waveforms
+                    if (!File.Exists(targetDatPath))
+                    {
+                        Log.Error("The stem analysis file {targetDatPath} is missing. Please analyze the stems in rekordbox and restart the program.", targetDatPath);
+                        return null;
+                    }
+                    
+                    if (!File.Exists(targetExtPath))
+                    {
+                        Log.Error("The stem analysis file {targetExtPath} is missing. Please analyze the stems in rekordbox and restart the program.", targetExtPath);
+                        return null;
+                    }
+
+                    // Sync .DAT and .EXT files using existing stem waveform sections
                     try
                     {
                         var parentDatAnlz = parent.GetAnlz(AnalysisKind.Dat, config);
-                        if (parentDatAnlz != null)
+                        var stemDatAnlz = existingContent.GetAnlz(AnalysisKind.Dat, config);
+                        if (parentDatAnlz != null && stemDatAnlz != null)
                         {
-                            var stemDatAnlz = parentDatAnlz.Clone();
-                            stemDatAnlz.FilterWaveforms();
+                            stemDatAnlz.SyncFrom(parentDatAnlz);
                             var bytes = stemDatAnlz.Serialize();
                             Directory.CreateDirectory(Path.GetDirectoryName(targetDatPath));
                             File.WriteAllBytes(targetDatPath, bytes);
-                            Log.Info("Copied and filtered analysis .DAT to {path}", targetDatPath);
+                            Log.Info("Synced and updated analysis .DAT to {path}", targetDatPath);
                         }
 
                         var parentExtAnlz = parent.GetAnlz(AnalysisKind.Ext, config);
-                        if (parentExtAnlz != null)
+                        var stemExtAnlz = existingContent.GetAnlz(AnalysisKind.Ext, config);
+                        if (parentExtAnlz != null && stemExtAnlz != null)
                         {
-                            var stemExtAnlz = parentExtAnlz.Clone();
-                            stemExtAnlz.FilterWaveforms();
+                            stemExtAnlz.SyncFrom(parentExtAnlz);
                             var bytes = stemExtAnlz.Serialize();
                             Directory.CreateDirectory(Path.GetDirectoryName(targetExtPath));
                             File.WriteAllBytes(targetExtPath, bytes);
-                            Log.Info("Copied and filtered analysis .EXT to {path}", targetExtPath);
+                            Log.Info("Synced and updated analysis .EXT to {path}", targetExtPath);
                         }
                     }
                     catch (Exception ex)
