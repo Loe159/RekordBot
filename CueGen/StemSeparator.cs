@@ -61,8 +61,10 @@ namespace CueGen
                 return false;
             }
 
-            var vocalsFile = Path.Combine(fileDirectory, $"{fileName}_vocal.mp3");
-            var instrumentalFile = Path.Combine(fileDirectory, $"{fileName}_instrumental.mp3");
+            var extension = Path.GetExtension(audioFilePath).Equals(".flac", StringComparison.OrdinalIgnoreCase) ? "flac" : "mp3";
+
+            var vocalsFile = Path.Combine(fileDirectory, $"{fileName}_vocal." + extension);
+            var instrumentalFile = Path.Combine(fileDirectory, $"{fileName}_instrumental." + extension);
 
             // Check if stems already exist
             if (File.Exists(vocalsFile) && File.Exists(instrumentalFile))
@@ -95,7 +97,7 @@ namespace CueGen
                 var processInfo = new ProcessStartInfo
                 {
                     FileName = _demucsCommand,
-                    Arguments = $"-m demucs -n {model} --two-stems=vocals --mp3 -d {device} -o \"{tempOutputDir}\" \"{audioFilePath}\"",
+                    Arguments = $"-m demucs -n {model} --two-stems=vocals --{extension} -d {device} -o \"{tempOutputDir}\" \"{audioFilePath}\"",
                     UseShellExecute = false,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
@@ -147,8 +149,8 @@ namespace CueGen
                 {
                     // Move files from Demucs output structure to desired location
                     var demucsOutputDir = Path.Combine(tempOutputDir, model, fileName);
-                    var demucsVocalsFile = Path.Combine(demucsOutputDir, "vocals.mp3");
-                    var demucsNoVocalsFile = Path.Combine(demucsOutputDir, "no_vocals.mp3");
+                    var demucsVocalsFile = Path.Combine(demucsOutputDir, "vocals." + extension);
+                    var demucsNoVocalsFile = Path.Combine(demucsOutputDir, "no_vocals." + extension);
 
                     Log.Info("Looking for output files in: {dir}", demucsOutputDir);
 
@@ -338,9 +340,10 @@ namespace CueGen
         /// <returns>Path to vocals file if it exists, null otherwise</returns>
         public string GetVocalsPath(string audioFilePath)
         {
+            var extension = Path.GetExtension(audioFilePath).Equals("flac", StringComparison.OrdinalIgnoreCase) ? "flac" : "mp3";
             var fileName = Path.GetFileNameWithoutExtension(audioFilePath);
             var fileDirectory = Path.GetDirectoryName(audioFilePath);
-            var vocalsPath = Path.Combine(fileDirectory, $"{fileName}_vocal.mp3").Replace('\\', '/');
+            var vocalsPath = Path.Combine(fileDirectory, $"{fileName}_vocal." + extension).Replace('\\', '/');
             return File.Exists(vocalsPath) ? vocalsPath : null;
         }
 
@@ -352,9 +355,11 @@ namespace CueGen
         /// <returns>Path to instrumental file if it exists, null otherwise</returns>
         public string GetInstrumentalPath(string audioFilePath)
         {
+            var extension = Path.GetExtension(audioFilePath).Equals("flac", StringComparison.OrdinalIgnoreCase) ? "flac" : "mp3";
+
             var fileName = Path.GetFileNameWithoutExtension(audioFilePath);
             var fileDirectory = Path.GetDirectoryName(audioFilePath);
-            var instrumentalPath = Path.Combine(fileDirectory, $"{fileName}_instrumental.mp3").Replace('\\', '/');
+            var instrumentalPath = Path.Combine(fileDirectory, $"{fileName}_instrumental." + extension).Replace('\\', '/');
             return File.Exists(instrumentalPath) ? instrumentalPath : null;
         }
 
@@ -401,8 +406,9 @@ namespace CueGen
                     
                     if (existingContent == null || existingContent.Analysed == 0 || string.IsNullOrEmpty(existingContent.AnalysisDataPath))
                     {
-                        Log.Error("The stem {stemPath} is not analyzed in rekordbox. Please analyze the stems in rekordbox and restart the program.", stemPath);
-                        return null;
+                        Log.Warn("The stem {stemPath} is not analyzed in rekordbox. Skipping analysis sync from parent.", stemPath);
+                        result[stemPath] = (null, false);
+                        continue;
                     }
 
                     var stemAnalysisPath = existingContent.AnalysisDataPath;

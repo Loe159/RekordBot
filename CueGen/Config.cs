@@ -231,5 +231,39 @@ namespace CueGen
         /// When enabled, fetches and updates track metadata from Soundcharts.
         /// </summary>
         public bool UpdateFromSoundcharts { get; set; } = false;
+        /// <summary>
+        /// Gets or sets the Beatport Client ID.
+        /// </summary>
+        public string BeatportClientId { get; set; }
+        /// <summary>
+        /// Gets or sets the Beatport Client Secret.
+        /// </summary>
+        public string BeatportClientSecret { get; set; }
+        /// <summary>
+        /// Gets or sets the Beatport Access Token.
+        /// </summary>
+        public string BeatportAccessToken { get; set; }
+        /// <summary>
+        /// Gets or sets the Beatport Refresh Token.
+        /// </summary>
+        public string BeatportRefreshToken { get; set; }
+        /// <summary>
+        /// Gets or sets the Beatport Redirect URI.
+        /// </summary>
+        public string BeatportRedirectUri { get; set; } = "http://localhost";
+        /// <summary>
+        /// When enabled, fetches and updates track metadata from Beatport.
+        /// </summary>
+        public bool UpdateFromBeatport { get; set; } = false;
+
+        /// <summary>
+        /// Gets or sets the Beatport username.
+        /// </summary>
+        public string BeatportUsername { get; set; } = "loe_lg";
+
+        /// <summary>
+        /// Gets or sets the Beatport password.
+        /// </summary>
+        public string BeatportPassword { get; set; } = "ErHn$9ZNYqNC9Boh";
     }
 }

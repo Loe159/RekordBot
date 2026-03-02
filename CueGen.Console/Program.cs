@@ -23,6 +23,7 @@ namespace CueGen.Console
 
         static int Main(string[] args)
         {
+            LoadDotEnv();
             try
             {
                 var logConfig = new LoggingConfiguration();
@@ -46,6 +47,9 @@ namespace CueGen.Console
                 logConfig.AddRule(logLevel, LogLevel.Fatal, logConsole);
 
                 LogManager.Configuration = logConfig;
+
+                program.Config.BeatportUsername = Environment.GetEnvironmentVariable("BEATPORT_USERNAME");
+                program.Config.BeatportPassword = Environment.GetEnvironmentVariable("BEATPORT_PASSWORD");
 
                 try
                 {
@@ -166,6 +170,41 @@ namespace CueGen.Console
             {
                 Log.Fatal(ex, "An error has occurred");
                 return 2;
+            }
+        }
+
+        static void LoadDotEnv()
+        {
+            try
+            {
+                var path = Path.Combine(Directory.GetCurrentDirectory(), ".env");
+                if (!File.Exists(path)) return;
+
+                foreach (var line in File.ReadAllLines(path))
+                {
+                    if (string.IsNullOrWhiteSpace(line) || line.StartsWith("#")) continue;
+
+                    var parts = line.Split('=', 2);
+                    if (parts.Length == 2)
+                    {
+                        var key = parts[0].Trim();
+                        var value = parts[1].Trim();
+                        // Remove quotes if present
+                        if (value.StartsWith("\"") && value.EndsWith("\""))
+                            value = value.Substring(1, value.Length - 2);
+                        else if (value.StartsWith("'") && value.EndsWith("'"))
+                            value = value.Substring(1, value.Length - 2);
+
+                        if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable(key)))
+                        {
+                            Environment.SetEnvironmentVariable(key, value);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warn(ex, "Failed to load .env file");
             }
         }
 

@@ -100,6 +100,9 @@ namespace CueGen
         [SQLite.Ignore]
         public List<Cue> Cues { get; private set; } = new();
         [SQLite.Ignore]
+        
+        public Artist Artist { get; set; } = new();
+        [SQLite.Ignore]
         public List<SongMyTag> MyTags { get; private set; } = new();
 
         private Anlz dat;

@@ -9,6 +9,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using Newtonsoft.Json.Linq;
 
 namespace CueGen
 {
@@ -22,6 +23,11 @@ namespace CueGen
         public SQLiteConnectionString ConnectionString { get; set; }
 
         public Progress<Status> Progress { get; } = new Progress<Status>();
+
+        private Dictionary<string, string> _keys;
+        private Dictionary<string, string> KeysDictionary => _keys ??= GetKeys()
+            .GroupBy(k => k.ScaleName)
+            .ToDictionary(g => g.Key, g => g.First().ID);
 
         public Generator(Config config)
         {
@@ -44,6 +50,18 @@ namespace CueGen
 
             return cues;
         }
+        
+        public IList<Artist> GetArtists()
+        {
+            Log.Info("Getting artists from database {database}", ConnectionString.DatabasePath);
+
+            using var db = new SQLiteConnection(ConnectionString);
+            var artists = db.Table<Artist>().OrderBy(c => c.ID).ToList();
+
+            Log.Info("{artists} artists read", artists.Count);
+
+            return artists;
+        }
 
         public IList<Content> GetContents()
         {
@@ -54,12 +72,14 @@ namespace CueGen
 
             Log.Info("{count} contents read", contents.Count);
 
+            var artists = GetArtists();
             var cues = GetCues();
             var contentCues = GetContentCues();
             var songMyTags = GetSongMyTags();
 
             foreach (var content in contents)
             {
+                content.Artist = (artists.Where(c => c.ID == content.ArtistID).FirstOrDefault() ?? new Artist());
                 content.Cues.AddRange(cues.Where(c => c.ContentID == content.ID));
                 content.ContentCues.AddRange(contentCues.Where(c => c.ContentID == content.ID));
                 content.MyTags.AddRange(songMyTags.Where(t => t.ContentID == content.ID));
@@ -102,6 +122,18 @@ namespace CueGen
             Log.Info("{count} songMyTags read", songMyTags.Count);
 
             return songMyTags;
+        }
+
+        public IList<Key> GetKeys()
+        {
+            Log.Info("Getting keys from database {database}", ConnectionString.DatabasePath);
+
+            using var db = new SQLiteConnection(ConnectionString);
+            var keys = db.Table<Key>().OrderBy(c => c.ID).ToList();
+
+            Log.Info("{count} keys read", keys.Count);
+
+            return keys;
         }
 
         IList<MyTag> CreateMyTagEnergy(SQLiteConnection db, IList<MyTag> myTags)
@@ -188,6 +220,92 @@ namespace CueGen
 
             return energyMyTags;
         }
+        
+        IList<MyTag> CreateMyTagGenre(SQLiteConnection db, IList<MyTag> myTags, String genre = "")
+        {
+            var genreMyTag = myTags.FirstOrDefault(t => t.Name == "Genre" && t.ParentId == "root");
+
+            if (genreMyTag == null && !Config.RemoveOnly)
+            {
+                var roots = myTags.Where(t => t.ParentId == "root");
+                var maxRootId = roots.Max(t => long.Parse(t.ID));
+                var maxRootSeq = roots.Max(t => t.Seq) ?? 0;
+                var maxRootRbLocalUsn = roots.Max(t => t.rb_local_usn) ?? 0;
+
+                genreMyTag = new MyTag
+                {
+                    ID = (maxRootId + 1).ToString(),
+                    Seq = maxRootSeq + 1,
+                    Name = "Genre",
+                    Attribute = 1,
+                    ParentId = "root",
+                    UUID = Guid.NewGuid().ToString(),
+                    rb_local_usn = maxRootRbLocalUsn + 9,
+                    created_at = DateTime.UtcNow,
+                    updated_at = DateTime.UtcNow
+                };
+
+                Log.Info("Inserting Genre Energy");
+
+                if (!Config.DryRun)
+                    db.Insert(genreMyTag);
+            }
+            else if (Config.RemoveOnly)
+            {
+                var removeMyTags = myTags.Where(t => t.ParentId == genreMyTag.ID).ToList();
+                var songMyTags = GetSongMyTags();
+
+                Log.Info("Removing MyTag Energy");
+
+                if (!Config.DryRun)
+                {
+                    foreach (var songMyTag in songMyTags.Where(t => removeMyTags.Exists(r => r.ID == t.MyTagID)))
+                        db.Delete(songMyTag);
+                    db.Table<MyTag>().Delete(t => t.ParentId == genreMyTag.ID);
+                    db.Delete(genreMyTag);
+                }
+
+                return removeMyTags;
+            }
+
+            var genreMyTags = new List<MyTag>();
+            var maxId = myTags.Max(t => long.Parse(t.ID));
+            var maxRbLocalUsn = myTags.Max(t => t.rb_local_usn) ?? 0;
+            var maxSeq = myTags.Where(t => t.ParentId == genreMyTag.ID).Max(t => t.Seq) ?? 0;
+
+            if (genre.Length != 0)
+            {
+                var myTag = myTags.FirstOrDefault(t => t.Name == genre && t.ParentId == genreMyTag.ID);
+
+                if (myTag == null)
+                {
+                    maxId++;
+                    maxRbLocalUsn++;
+
+                    myTag = new MyTag
+                    {
+                        ID = maxId.ToString(),
+                        Seq = maxSeq + 1,
+                        Name = genre,
+                        Attribute = 0,
+                        ParentId = genreMyTag.ID,
+                        UUID = Guid.NewGuid().ToString(),
+                        rb_local_usn = maxRbLocalUsn,
+                        created_at = DateTime.UtcNow,
+                        updated_at = DateTime.UtcNow
+                    };
+
+                    Log.Info("Inserting MyTag Genre {genre}", genre);
+
+                    if (!Config.DryRun)
+                        db.Insert(myTag);
+                }
+                
+                genreMyTags.Add(myTag);
+            }
+
+            return genreMyTags;
+        }
 
         ulong GetMaxId()
         {
@@ -202,6 +320,7 @@ namespace CueGen
             var error = false;
             var maxId = GetMaxId() + 1;
             IList<MyTag> energyMyTags = new List<MyTag>();
+            IList<MyTag> genreMyTags = new List<MyTag>();
             long maxMyTagUsn = 0L;
             using var db = new SQLiteConnection(ConnectionString);
 
@@ -249,33 +368,78 @@ namespace CueGen
                 soundchartsClient = new SoundchartsClient(Config.SoundchartsAppId, Config.SoundchartsApiKey);
             }
 
+            BeatportClient beatportClient;
+            
+            if (Config.UpdateFromBeatport ||true)
+            {
+                beatportClient = new BeatportClient("loe_lg", "ErHn$9ZNYqNC9Boh");
+            }
+
             var count = 0;
 
             foreach (var content in contents)
             {
                 ((IProgress<Status>)Progress).Report(new Status(contents.Count, count, content));
 
-                // Update metadata from Soundcharts if enabled
-                if (Config.UpdateFromSoundcharts && soundchartsClient != null && !Config.RemoveOnly)
+                if (beatportClient != null)
                 {
+                    var isrc = content.ISRC;
+
+                    var response = beatportClient.GetTracks(
+                        new Dictionary<string, string>
+                        {
+                            { "isrc", isrc },
+                        },
+                        perPage: 1
+                    );
+
+
+                    var track = response.Results.FirstOrDefault();
+
+                    // Try with Artists and Title
+                    if (track == null)
+                    {
+                        response = beatportClient.GetTracks(
+                            new Dictionary<string, string>
+                            {
+                                { "artist_name", content.Artist.Name.Split("/").First() },
+                                { "name", content.Title.Split(" - ")[0] },
+                            },
+                            perPage: 1
+                        );
+                        track = response.Results.FirstOrDefault();
+                    }
+                    
                     try
                     {
-                        UpdateMetadataForContentAsync(db, content, soundchartsClient).GetAwaiter().GetResult();
+                        Console.WriteLine(track.Artists.First().Name);
+                        Console.WriteLine(track.Name);
+                        Console.WriteLine(track.Genre.Name);
+                        Console.WriteLine(track.Sub_Genre?.Name);
+                        
+                        
+                        db.RunInTransaction(() => CreateSongMyTagGenre(content, track.Genre, maxMyTagUsn, db));
+
+                        if (track.Sub_Genre != null)
+                        {
+                            db.RunInTransaction(() => CreateSongMyTagGenre(content, track.Sub_Genre, maxMyTagUsn, db));
+                        }
                     }
                     catch (Exception ex)
                     {
-                        Log.Error(ex, "Error updating metadata from Soundcharts for {contentID}", content.ID);
+                        Log.Error(ex, "Error occurred during creation of Genre MyTag for {contentID} from {path}", content.ID, content.FolderPath);
                         error = true;
                     }
+                    
                 }
-                
+
                 // Perform stem separation if enabled
                 if (stemSeparator != null && !Config.RemoveOnly)
                 {
                     try
                     {
                         Log.Info("Starting stem separation for {contentID} at {path}", content.ID, content.FolderPath);
-                        var success = true;//stemSeparator.SeparateStems(content.FolderPath, Config.DemucsModel);
+                        var success = stemSeparator.SeparateStems(content.FolderPath, Config.DemucsModel);
 
                         if (success)
                         {
@@ -350,8 +514,6 @@ namespace CueGen
                 count++;
             }
 
-            soundchartsClient?.Dispose();
-
             Log.Info($"Finished cue points creation {(error ? "with" : "without")} errors");
 
             return error;
@@ -424,6 +586,58 @@ namespace CueGen
                 Log.Info("No energy level found for {contentId}", content.ID);
             }
         }
+        
+        private void CreateSongMyTagGenre(Content content, BeatportClient.BeatportGenre genre, long maxMyTagUsn, SQLiteConnection db)
+        {
+            var myTags = GetMyTags();
+            MyTag genreMyTags = null;
+            
+            if (genre != null)
+            {
+                Log.Info("Genre for {contentId} is {genre}", content.ID, genre.Name);
+
+                db.RunInTransaction(() => genreMyTags = CreateMyTagGenre(db, myTags, genre.Name).First());
+                
+                if (genreMyTags == null) return;
+
+                var songMyTag = content.MyTags.Find(t => t.MyTagID == genreMyTags.ID);
+                if (songMyTag == null)
+                {
+                    maxMyTagUsn++;
+
+                    songMyTag = new SongMyTag
+                    {
+                        ID = Guid.NewGuid().ToString(),
+                        MyTagID = genreMyTags.ID,
+                        ContentID = content.ID,
+                        UUID = Guid.NewGuid().ToString(),
+                        rb_local_usn = maxMyTagUsn,
+                        created_at = DateTime.UtcNow,
+                        updated_at = DateTime.UtcNow
+                    };
+
+                    Log.Info("Inserting Genre MyTag {genre} for {contentId}", genre, content.ID);
+
+                    if (!Config.DryRun)
+                        db.Insert(songMyTag);
+                }
+                else
+                {
+                    Log.Info("Genre MyTag for {contentId} already at {genre}", content.ID, genre);
+                }
+
+                /*foreach (var myTag in content.MyTags.Select(t => (Genre: genreMyTags.(e => e.ID == t.MyTagID), Tag: t))
+                    .Where(t => t.Genre != null && t.Tag.MyTagID != genreMyTags.ID))
+                {
+                    Log.Info("Removing Genre MyTag {genre} for {contentId}", myTag.Genre.Seq, content.ID);
+                    db.Delete(myTag.Tag);
+                }*/
+            }
+            else
+            {
+                Log.Info("No genre level found for {contentId}", content.ID);
+            }
+        }
 
         static readonly Dictionary<PhraseGroup, string> DefaultPhraseNames = new()
         {
@@ -462,19 +676,31 @@ namespace CueGen
             var phraseNames = Config.PhraseNames ?? DefaultPhraseNames;
             var cues = new List<CuePoint>();
 
+            int? lastOrder = null;
             for (int i = 0; i < phrases.Count; i++)
             {
                 var phrase = phrases[i];
-                if (!phraseOrder.ContainsKey(phrase.Kind.Group))
+                if (!phraseOrder.TryGetValue(phrase.Kind.Group, out var currentOrder))
                     continue;
 
-                // Compute phrase length in bars
+                // Grouping: consecutive phrases with the same ORDER are skipped
+                if (lastOrder == currentOrder)
+                    continue;
+
+                // Find the end of this combined section to compute total length
+                int j = i + 1;
+                while (j < phrases.Count &&
+                       phraseOrder.TryGetValue(phrases[j].Kind.Group, out var nextOrder) &&
+                       nextOrder == currentOrder)
+                {
+                    j++;
+                }
+
                 var startBeat = phrase.Beat - 1;
-                var endBeat = (i + 1 < phrases.Count) ? phrases[i + 1].Beat - 1 : (phraseTag.EndBeat - 1);
-                startBeat = Math.Max(0, startBeat);
-                endBeat = Math.Min(endBeat, beats.Count - 1);
-                var lengthBeats = Math.Max(0, endBeat - startBeat);
+                var endBeat = (j < phrases.Count) ? phrases[j].Beat - 1 : (phraseTag.EndBeat - 1);
+                var lengthBeats = endBeat - startBeat;
                 var lengthBars = lengthBeats / 4;
+
                 if (lengthBars < Config.MinPhraseLength)
                     continue;
 
@@ -494,10 +720,8 @@ namespace CueGen
                         cue.Type = CueType.Hot;
                     }
                     cues.Add(cue);
+                    lastOrder = currentOrder;
                 }
-
-                // Only the first qualifying phrase is used
-                break;
             }
 
             return cues;
@@ -981,37 +1205,91 @@ namespace CueGen
         int MsToBeats(double ms, int bpm) => (int)Math.Round(bpm * (ms / (60.0 * 1000.0)) / 100.0);
         int Bars(double ms, int bpm) => MsToBeats(ms, bpm) / 4 + 1;
 
+
+        private static string ToCamelot(int key, int mode)
+        {
+            // key: 0=C, 1=C#/Db, 2=D, 3=D#/Eb, 4=E, 5=F, 6=F#/Gb, 7=G, 8=G#/Ab, 9=A, 10=A#/Bb, 11=B
+            // mode: 1=major → B; 0=minor → A
+            // Mapping derived from Camelot Wheel standard
+            var major = new string[] {"8B","3B","10B","5B","12B","7B","2B","9B","4B","11B","6B","1B"};
+            var minor = new string[] {"5A","12A","7A","2A","9A","4A","11A","6A","1A","8A","3A","10A"};
+            var arr = mode == 1 ? major : minor; // default to minor if mode != 1? We'll treat any non-1 as minor per API (0=minor)
+            if (key < 0 || key > 11) return null;
+            return arr[key];
+        }
+
+        /*private string GetOrCreateGenre(SQLiteConnection db, string genreName)
+        {
+            if (string.IsNullOrWhiteSpace(genreName)) return null;
+
+            var genre = db.Table<Genre>().FirstOrDefault(g => g.Name == genreName);
+            if (genre != null) return genre.ID;
+
+            var newId = Genre.GetNextId(db);
+            genre = new Genre
+            {
+                ID = newId,
+                Name = genreName,
+                UUID = Guid.NewGuid().ToString(),
+                created_at = DateTime.UtcNow,
+                updated_at = DateTime.UtcNow
+            };
+
+            Log.Info("Creating new genre {genreName} with ID {genreId}", genreName, newId);
+            if (!Config.DryRun)
+                db.Insert(genre);
+
+            return newId;
+        }
+
+        private bool MapBeatportToContent(SQLiteConnection db, Content content, BeatportTrack track)
+        {
+            if (track == null) return false;
+            bool changed = false;
+
+            // Map Beatport Genre/Subgenre
+            var genreName = track.Genres?.FirstOrDefault()?.Name;
+            var subGenreName = track.SubGenres?.FirstOrDefault()?.Name;
+
+            var finalGenreName = genreName;
+            if (!string.IsNullOrEmpty(subGenreName))
+            {
+                finalGenreName = $"{genreName} / {subGenreName}";
+            }
+
+            if (!string.IsNullOrEmpty(finalGenreName))
+            {
+                var genreId = GetOrCreateGenre(db, finalGenreName);
+                if (genreId != null && content.GenreID != genreId)
+                {
+                    content.GenreID = genreId;
+                    changed = true;
+                }
+            }
+
+            if (changed)
+            {
+                content.updated_at = DateTime.UtcNow;
+            }
+
+            return changed;
+        }
+
         private bool MapSoundchartsToContent(Content content, SoundchartsSong song)
         {
             if (song == null) return false;
             bool changed = false;
 
-            if (!string.IsNullOrWhiteSpace(song.Name) && string.IsNullOrWhiteSpace(content.Title))
+            // Map Soundcharts Key/Mode -> Rekordbox Camelot KeyID 
+            if (song.Audio?.Key.HasValue == true && song.Audio.Key.Value >= 0 && song.Audio.Key.Value <= 11)
             {
-                content.Title = song.Name;
-                changed = true;
-            }
-
-            if (song.Duration.HasValue && (!content.Length.HasValue || content.Length.Value == 0))
-            {
-                content.Length = song.Duration.Value;
-                changed = true;
-            }
-
-            if (song.Audio?.Tempo.HasValue == true)
-            {
-                var bpm = (int)Math.Round(song.Audio.Tempo.Value * 100.0);
-                if (!content.BPM.HasValue || content.BPM.Value == 0)
+                var mode = song.Audio.Mode ?? 1; // default to major if missing per API? Mode: 1=major, 0=minor
+                var camelot = ToCamelot(song.Audio.Key.Value, mode);
+                if (!string.IsNullOrEmpty(camelot) && KeysDictionary.TryGetValue(camelot, out var keyId))
                 {
-                    content.BPM = bpm;
+                    content.KeyID = keyId;
                     changed = true;
                 }
-            }
-
-            if (!string.IsNullOrWhiteSpace(song.Isrc?.Value) && string.IsNullOrWhiteSpace(content.ISRC))
-            {
-                content.ISRC = song.Isrc.Value;
-                changed = true;
             }
 
             if (song.ReleaseDate.HasValue)
@@ -1074,5 +1352,41 @@ namespace CueGen
                 Log.Error(ex, "Failed to update metadata from Soundcharts for {contentID}", content?.ID);
             }
         }
+
+        private async Task UpdateMetadataFromBeatportAsync(SQLiteConnection db, Content content, BeatportClient client)
+        {
+            try
+            {
+                if (content == null || client.HasFailedAuthentication) return;
+                var isrc = content.ISRC;
+                if (string.IsNullOrWhiteSpace(isrc))
+                {
+                    Log.Info("Skipping Beatport fetch for {contentID}: no ISRC in database", content.ID);
+                    return;
+                }
+
+                var track = await client.GetTrackByIsrcAsync(isrc);
+                if (track == null)
+                {
+                    Log.Warn("No Beatport data found for ISRC {isrc}", isrc);
+                    return;
+                }
+
+                if (MapBeatportToContent(db, content, track))
+                {
+                    Log.Info("Updating content {contentID} with Beatport metadata (ISRC {isrc})", content.ID, isrc);
+                    if (!Config.DryRun)
+                        db.Update(content);
+                }
+                else
+                {
+                    Log.Info("No Beatport metadata changes required for {contentID}", content.ID);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Failed to update metadata from Beatport for {contentID}", content?.ID);
+            }
+        }*/
     }
 }
