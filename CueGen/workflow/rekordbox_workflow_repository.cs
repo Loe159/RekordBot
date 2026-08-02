@@ -11,16 +11,23 @@ namespace CueGen.Workflow
         private readonly SQLiteConnection database;
         private readonly IList<MyTag> tags;
         private readonly IList<SongMyTag> relations;
+        private readonly IList<Cue> cues;
+        private readonly IList<ContentCue> contentCues;
         private long nextTagId;
         private long nextTagUsn;
         private long nextRelationUsn;
         private long nextContentUsn;
+        private ulong nextCueId;
+        private long nextCueUsn;
+        private long nextContentCueUsn;
 
         public RekordboxWorkflowRepository(SQLiteConnection database)
         {
             this.database = database ?? throw new ArgumentNullException(nameof(database));
             tags = database.Table<MyTag>().ToList();
             relations = database.Table<SongMyTag>().ToList();
+            cues = database.Table<Cue>().ToList();
+            contentCues = database.Table<ContentCue>().ToList();
             nextTagId = tags
                 .Select(tag => long.TryParse(tag.ID, NumberStyles.None, CultureInfo.InvariantCulture, out var id) ? id : 0L)
                 .DefaultIfEmpty(0L)
@@ -29,6 +36,15 @@ namespace CueGen.Workflow
             nextRelationUsn = relations.Select(relation => relation.rb_local_usn ?? 0L).DefaultIfEmpty(0L).Max();
             nextContentUsn = database.Table<Content>()
                 .Select(content => content.rb_local_usn ?? 0L)
+                .DefaultIfEmpty(0L)
+                .Max();
+            nextCueId = cues
+                .Select(cue => ulong.TryParse(cue.ID, NumberStyles.None, CultureInfo.InvariantCulture, out var id) ? id : 0UL)
+                .DefaultIfEmpty(0UL)
+                .Max();
+            nextCueUsn = cues.Select(cue => cue.rb_local_usn ?? 0L).DefaultIfEmpty(0L).Max();
+            nextContentCueUsn = contentCues
+                .Select(contentCue => contentCue.rb_local_usn ?? 0L)
                 .DefaultIfEmpty(0L)
                 .Max();
         }
@@ -41,6 +57,114 @@ namespace CueGen.Workflow
         public IList<Artist> GetArtists()
         {
             return database.Table<Artist>().ToList();
+        }
+
+        public IList<WorkflowHotCueState> GetManagedHotCueStates(
+            string contentId,
+            WorkflowTaxonomy taxonomy)
+        {
+            return cues
+                .Where(cue => cue.ContentID == contentId && IsManagedCue(cue))
+                .Select(cue => (Cue: cue, Slot: KindToSlot(cue.Kind)))
+                .Where(item => item.Slot != null && taxonomy.HotCues.ContainsKey(item.Slot))
+                .Select(item =>
+                {
+                    var mapping = taxonomy.HotCues[item.Slot];
+                    return new WorkflowHotCueState
+                    {
+                        Slot = item.Slot,
+                        Name = item.Cue.Comment,
+                        Color = mapping.Color,
+                        ColorTableIndex = item.Cue.ColorTableIndex,
+                        PositionMs = item.Cue.InMsec ?? 0,
+                        LoopBeats = GetLoopBeats(item.Cue)
+                    };
+                })
+                .OrderBy(cue => cue.Slot, StringComparer.Ordinal)
+                .ToList();
+        }
+
+        public void ValidateHotCuePreflight(Content content, IList<WorkflowHotCue> desiredCues)
+        {
+            if (desiredCues == null)
+                return;
+
+            foreach (var desired in desiredCues)
+            {
+                var kind = SlotToKind(desired.Slot);
+                if (cues.Any(cue => cue.ContentID == content.ID && cue.Kind == kind && !IsManagedCue(cue)))
+                {
+                    throw new InvalidOperationException(
+                        $"Manual Hot Cue {desired.Slot} already occupies the requested slot; no cue was changed");
+                }
+
+                if (content.Length.HasValue && desired.PositionMs > content.Length.Value * 1000)
+                    throw new InvalidOperationException($"Hot Cue {desired.Slot} is outside the track duration");
+
+                if (desired.LoopBeats.HasValue)
+                    GetLoopEnd(content, desired);
+            }
+        }
+
+        public bool IsContentCueConsistent(string contentId)
+        {
+            var rows = contentCues.Where(row => row.ContentID == contentId).ToList();
+            if (rows.Count != 1)
+                return false;
+
+            var allCues = GetOrderedCues(contentId);
+            var expected = new ContentCue();
+            expected.SetCues(allCues);
+            return rows[0].rb_cue_count == allCues.Count &&
+                string.Equals(rows[0].Cues, expected.Cues, StringComparison.Ordinal);
+        }
+
+        public bool SyncHotCues(
+            Content content,
+            IList<WorkflowHotCue> desiredCues,
+            WorkflowTaxonomy taxonomy)
+        {
+            if (desiredCues == null)
+                return false;
+
+            ValidateHotCuePreflight(content, desiredCues);
+            var desiredByKind = desiredCues.ToDictionary(cue => SlotToKind(cue.Slot));
+            var managed = cues
+                .Where(cue => cue.ContentID == content.ID && IsManagedCue(cue) && KindToSlot(cue.Kind) != null)
+                .OrderBy(cue => ParseCueId(cue.ID))
+                .ToList();
+            var changed = false;
+
+            foreach (var group in managed.GroupBy(cue => cue.Kind ?? 0))
+            {
+                if (!desiredByKind.TryGetValue(group.Key, out var desired))
+                {
+                    foreach (var cue in group)
+                        changed |= DeleteCue(cue);
+                    continue;
+                }
+
+                var keep = group.First();
+                foreach (var duplicate in group.Skip(1))
+                    changed |= DeleteCue(duplicate);
+                changed |= UpdateCue(keep, content, desired, taxonomy.HotCues[desired.Slot]);
+                desiredByKind.Remove(group.Key);
+            }
+
+            foreach (var desired in desiredByKind.Values.OrderBy(cue => cue.Slot, StringComparer.Ordinal))
+            {
+                var cue = CreateCue(content, desired, taxonomy.HotCues[desired.Slot]);
+                database.Insert(cue);
+                cues.Add(cue);
+                changed = true;
+            }
+
+            if (changed || !IsContentCueConsistent(content.ID))
+            {
+                SyncContentCue(content);
+                changed = true;
+            }
+            return changed;
         }
 
         public IList<string> GetAssignedTagNames(string contentId, string categoryName)
@@ -171,6 +295,187 @@ namespace CueGen.Workflow
             if (required && matches.Count == 0)
                 throw new InvalidOperationException($"My Tag '{name}' does not exist under '{parentId}'");
             return matches.SingleOrDefault();
+        }
+
+        private Cue CreateCue(
+            Content content,
+            WorkflowHotCue desired,
+            WorkflowHotCueMapping mapping)
+        {
+            var id = ++nextCueId;
+            var now = DateTime.UtcNow;
+            var cue = new Cue
+            {
+                ID = id.ToString(CultureInfo.InvariantCulture),
+                ContentID = content.ID,
+                InMsec = desired.PositionMs.Value,
+                InFrame = Generator.TimeToFrame(desired.PositionMs.Value),
+                Kind = SlotToKind(desired.Slot),
+                Color = -1,
+                ColorTableIndex = mapping.ColorTableIndex,
+                Comment = mapping.Name,
+                ContentUUID = content.UUID,
+                UUID = Generator.CreateManagedCueUuid(id),
+                rb_local_usn = ++nextCueUsn,
+                created_at = now,
+                updated_at = now
+            };
+            SetLoop(cue, content, desired);
+            return cue;
+        }
+
+        private bool UpdateCue(
+            Cue cue,
+            Content content,
+            WorkflowHotCue desired,
+            WorkflowHotCueMapping mapping)
+        {
+            var expectedOut = desired.LoopBeats.HasValue ? GetLoopEnd(content, desired) : -1;
+            var expectedOutFrame = desired.LoopBeats.HasValue ? Generator.TimeToFrame(expectedOut) : 0;
+            var expectedLoopSize = desired.LoopBeats.HasValue ? 0x10000 * desired.LoopBeats.Value + 1 : (int?)null;
+            var expectedActiveLoop = desired.LoopBeats.HasValue ? 1 : (int?)null;
+            var expectedColor = desired.LoopBeats.HasValue ? 255 : -1;
+            if (cue.InMsec == desired.PositionMs &&
+                cue.InFrame == Generator.TimeToFrame(desired.PositionMs.Value) &&
+                cue.OutMsec == expectedOut &&
+                cue.OutFrame == expectedOutFrame &&
+                cue.Kind == SlotToKind(desired.Slot) &&
+                cue.Color == expectedColor &&
+                cue.ColorTableIndex == mapping.ColorTableIndex &&
+                cue.ActiveLoop == expectedActiveLoop &&
+                cue.BeatLoopSize == expectedLoopSize &&
+                cue.Comment == mapping.Name &&
+                cue.ContentUUID == content.UUID)
+            {
+                return false;
+            }
+
+            cue.InMsec = desired.PositionMs.Value;
+            cue.InFrame = Generator.TimeToFrame(desired.PositionMs.Value);
+            cue.Kind = SlotToKind(desired.Slot);
+            cue.ColorTableIndex = mapping.ColorTableIndex;
+            cue.Comment = mapping.Name;
+            cue.ContentUUID = content.UUID;
+            SetLoop(cue, content, desired);
+            cue.rb_local_usn = ++nextCueUsn;
+            cue.updated_at = DateTime.UtcNow;
+            database.Update(cue);
+            return true;
+        }
+
+        private void SetLoop(Cue cue, Content content, WorkflowHotCue desired)
+        {
+            cue.OutMsec = -1;
+            cue.OutFrame = 0;
+            cue.ActiveLoop = null;
+            cue.BeatLoopSize = null;
+            cue.CueMicrosec = null;
+            cue.Color = -1;
+            if (!desired.LoopBeats.HasValue)
+                return;
+
+            var outMsec = GetLoopEnd(content, desired);
+            cue.OutMsec = outMsec;
+            cue.OutFrame = Generator.TimeToFrame(outMsec);
+            cue.ActiveLoop = 1;
+            cue.BeatLoopSize = 0x10000 * desired.LoopBeats.Value + 1;
+            cue.CueMicrosec = 0;
+            cue.Color = 255;
+        }
+
+        private static int GetLoopEnd(Content content, WorkflowHotCue desired)
+        {
+            if (!content.BPM.HasValue || content.BPM.Value <= 0)
+                throw new InvalidOperationException($"Hot Cue {desired.Slot} loop requires a valid track BPM");
+
+            var outMsec = desired.PositionMs.Value + Generator.BeatsToMs(desired.LoopBeats.Value, content.BPM.Value);
+            if (content.Length.HasValue && outMsec > content.Length.Value * 1000)
+                throw new InvalidOperationException($"Hot Cue {desired.Slot} loop extends beyond the track duration");
+            return outMsec;
+        }
+
+        private bool DeleteCue(Cue cue)
+        {
+            database.Delete(cue);
+            cues.Remove(cue);
+            return true;
+        }
+
+        private void SyncContentCue(Content content)
+        {
+            var rows = contentCues.Where(row => row.ContentID == content.ID).ToList();
+            if (rows.Count > 1)
+                throw new InvalidOperationException($"Multiple contentCue rows exist for content '{content.ID}'");
+
+            var allCues = GetOrderedCues(content.ID);
+            var now = DateTime.UtcNow;
+            var contentCue = rows.SingleOrDefault();
+            if (contentCue == null)
+            {
+                contentCue = new ContentCue
+                {
+                    ID = content.UUID,
+                    ContentID = content.ID,
+                    UUID = Guid.NewGuid().ToString(),
+                    created_at = now
+                };
+                contentCue.SetCues(allCues);
+                contentCue.rb_cue_count = allCues.Count;
+                contentCue.rb_local_usn = ++nextContentCueUsn;
+                contentCue.updated_at = now;
+                database.Insert(contentCue);
+                contentCues.Add(contentCue);
+                return;
+            }
+
+            contentCue.SetCues(allCues);
+            contentCue.rb_cue_count = allCues.Count;
+            contentCue.rb_local_usn = ++nextContentCueUsn;
+            contentCue.updated_at = now;
+            database.Update(contentCue);
+        }
+
+        private IList<Cue> GetOrderedCues(string contentId)
+        {
+            return cues
+                .Where(cue => cue.ContentID == contentId)
+                .OrderBy(cue => cue.Kind ?? 0)
+                .ThenBy(cue => cue.InMsec ?? 0)
+                .ThenBy(cue => ParseCueId(cue.ID))
+                .ToList();
+        }
+
+        private static bool IsManagedCue(Cue cue)
+        {
+            return cue.UUID != null && cue.UUID.StartsWith(Generator.UUIDPrefix, StringComparison.Ordinal);
+        }
+
+        private static int SlotToKind(string slot)
+        {
+            var index = slot[0] - 'A' + 1;
+            return index >= 4 ? index + 1 : index;
+        }
+
+        private static string KindToSlot(int? kind)
+        {
+            if (!kind.HasValue || kind.Value < 1 || kind.Value > 9 || kind.Value == 4)
+                return null;
+            var index = kind.Value > 4 ? kind.Value - 1 : kind.Value;
+            return ((char)('A' + index - 1)).ToString();
+        }
+
+        private static int? GetLoopBeats(Cue cue)
+        {
+            if (!cue.BeatLoopSize.HasValue || cue.BeatLoopSize.Value <= 1)
+                return null;
+            return (cue.BeatLoopSize.Value - 1) / 0x10000;
+        }
+
+        private static ulong ParseCueId(string id)
+        {
+            return ulong.TryParse(id, NumberStyles.None, CultureInfo.InvariantCulture, out var value)
+                ? value
+                : ulong.MaxValue;
         }
     }
 }

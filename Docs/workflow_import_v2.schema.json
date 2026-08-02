@@ -23,7 +23,7 @@
         {"required": ["artist"]}
       ]
     },
-    "status": {"enum": ["To Do", "Mood", "Energy", "Tags", "Hot Cues"]},
+    "status": {"type": ["string", "null"], "enum": ["To Do", "Mood", "Energy", "Tags", "Hot Cues", null]},
     "mood": {
       "oneOf": [
         {"$ref": "#/$defs/mood_pink"},
@@ -37,7 +37,23 @@
       ]
     },
     "energy": {"type": "integer", "minimum": 1, "maximum": 5},
-    "my_tags": {"$ref": "#/$defs/my_tags"}
+    "my_tags": {"$ref": "#/$defs/my_tags"},
+    "beatgrid_verified": {"type": "boolean"},
+    "quantize_verified": {"type": "boolean"},
+    "hot_cues": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/hot_cue"},
+      "allOf": [
+        {"contains": {"properties": {"slot": {"const": "A"}}}, "minContains": 0, "maxContains": 1},
+        {"contains": {"properties": {"slot": {"const": "B"}}}, "minContains": 0, "maxContains": 1},
+        {"contains": {"properties": {"slot": {"const": "C"}}}, "minContains": 0, "maxContains": 1},
+        {"contains": {"properties": {"slot": {"const": "D"}}}, "minContains": 0, "maxContains": 1},
+        {"contains": {"properties": {"slot": {"const": "E"}}}, "minContains": 0, "maxContains": 1},
+        {"contains": {"properties": {"slot": {"const": "F"}}}, "minContains": 0, "maxContains": 1},
+        {"contains": {"properties": {"slot": {"const": "G"}}}, "minContains": 0, "maxContains": 1},
+        {"contains": {"properties": {"slot": {"const": "H"}}}, "minContains": 0, "maxContains": 1}
+      ]
+    }
   },
   "allOf": [
     {
@@ -51,13 +67,34 @@
     {
       "if": {"properties": {"status": {"const": "Hot Cues"}}},
       "then": {"required": ["my_tags"]}
+    },
+    {
+      "if": {"properties": {"status": {"type": "null"}}},
+      "then": {
+        "required": ["mood", "energy", "my_tags", "beatgrid_verified", "quantize_verified", "hot_cues"],
+        "properties": {
+          "beatgrid_verified": {"const": true},
+          "quantize_verified": {"const": true},
+          "hot_cues": {
+            "allOf": [
+              {"contains": {"properties": {"slot": {"const": "A"}}, "required": ["slot"]}},
+              {"contains": {"properties": {"slot": {"const": "C"}}, "required": ["slot"]}},
+              {"contains": {"properties": {"slot": {"const": "E"}}, "required": ["slot"]}}
+            ]
+          }
+        }
+      }
     }
   ],
   "$defs": {
     "mood_base": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["color", "label"]
+      "required": ["color", "label"],
+      "properties": {
+        "color": {"type": "string"},
+        "label": {"type": "string"}
+      }
     },
     "mood_pink": {"allOf": [{"$ref": "#/$defs/mood_base"}, {"properties": {"color": {"const": "Pink"}, "label": {"const": "Sexy"}}}]},
     "mood_red": {"allOf": [{"$ref": "#/$defs/mood_base"}, {"properties": {"color": {"const": "Red"}, "label": {"const": "\u00c9nergie"}}}]},
@@ -76,6 +113,31 @@
         "year_origin": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
         "situations": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
       }
+    },
+    "hot_cue_base": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["slot", "name", "color", "position_ms", "phrase_start_verified"],
+      "properties": {
+        "slot": {"enum": ["A", "B", "C", "D", "E", "F", "G", "H"]},
+        "name": {"type": "string"},
+        "color": {"type": "string"},
+        "position_ms": {"type": "integer", "minimum": 0},
+        "phrase_start_verified": {"const": true},
+        "loop_beats": {"type": ["integer", "null"], "enum": [8, 16, null]}
+      }
+    },
+    "hot_cue": {
+      "oneOf": [
+        {"allOf": [{"$ref": "#/$defs/hot_cue_base"}, {"properties": {"slot": {"const": "A"}, "name": {"const": "IN-32"}, "color": {"const": "Green"}, "loop_beats": {"type": "null"}}}]},
+        {"allOf": [{"$ref": "#/$defs/hot_cue_base"}, {"properties": {"slot": {"const": "B"}, "name": {"const": "BUILD-16"}, "color": {"const": "Yellow"}, "loop_beats": {"type": "null"}}}]},
+        {"allOf": [{"$ref": "#/$defs/hot_cue_base"}, {"properties": {"slot": {"const": "C"}, "name": {"const": "DROP 1"}, "color": {"const": "Red"}, "loop_beats": {"type": "null"}}}]},
+        {"allOf": [{"$ref": "#/$defs/hot_cue_base"}, {"properties": {"slot": {"const": "D"}, "name": {"const": "BREAK"}, "color": {"const": "Blue"}, "loop_beats": {"type": "null"}}}]},
+        {"allOf": [{"$ref": "#/$defs/hot_cue_base"}, {"properties": {"slot": {"const": "E"}, "name": {"const": "OUT-32"}, "color": {"const": "Orange"}, "loop_beats": {"type": "null"}}}]},
+        {"allOf": [{"$ref": "#/$defs/hot_cue_base"}, {"properties": {"slot": {"const": "F"}, "name": {"const": "PEAK / DROP 2"}, "color": {"const": "Purple"}, "loop_beats": {"type": "null"}}}]},
+        {"allOf": [{"$ref": "#/$defs/hot_cue_base"}, {"properties": {"slot": {"const": "G"}, "name": {"const": "VOCAL / HOOK"}, "color": {"const": "Pink"}, "loop_beats": {"type": "null"}}}]},
+        {"allOf": [{"$ref": "#/$defs/hot_cue_base"}, {"required": ["loop_beats"], "properties": {"slot": {"const": "H"}, "name": {"const": "LOOP"}, "color": {"const": "Cyan"}, "loop_beats": {"enum": [8, 16]}}}]}
+      ]
     }
   }
 }

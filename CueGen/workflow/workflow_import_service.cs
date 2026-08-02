@@ -65,6 +65,7 @@ namespace CueGen.Workflow
                     repository.GetContents(),
                     artists,
                     databasePath);
+                repository.ValidateHotCuePreflight(content, document.HotCues);
                 var changes = BuildChanges(repository, content, document);
 
                 if (!config.DryRun && changes.Count > 0)
@@ -107,7 +108,7 @@ namespace CueGen.Workflow
                 content.ID,
                 "status",
                 taxonomy.Categories.Status,
-                new[] { document.Status });
+                DesiredStatus(document.Status));
 
             if (document.MyTags != null)
             {
@@ -115,6 +116,8 @@ namespace CueGen.Workflow
                 AddTagChange(changes, repository, content.ID, "my_tags.year_origin", taxonomy.Categories.YearOrigin, document.MyTags.YearOrigin);
                 AddTagChange(changes, repository, content.ID, "my_tags.situations", taxonomy.Categories.Situations, document.MyTags.Situations);
             }
+
+            AddHotCueChange(changes, repository, content.ID, document.HotCues);
 
             return changes;
         }
@@ -126,7 +129,7 @@ namespace CueGen.Workflow
         {
             var colorId = document.Mood == null ? null : GetMood(document.Mood).ColorId;
             repository.UpdateMetadata(content, colorId, document.Energy);
-            repository.SyncCategory(content.ID, taxonomy.Categories.Status, new[] { document.Status });
+            repository.SyncCategory(content.ID, taxonomy.Categories.Status, DesiredStatus(document.Status));
 
             if (document.MyTags != null)
             {
@@ -134,6 +137,8 @@ namespace CueGen.Workflow
                 repository.SyncCategory(content.ID, taxonomy.Categories.YearOrigin, document.MyTags.YearOrigin);
                 repository.SyncCategory(content.ID, taxonomy.Categories.Situations, document.MyTags.Situations);
             }
+
+            repository.SyncHotCues(content, document.HotCues, taxonomy);
         }
 
         private WorkflowMoodMapping GetMood(WorkflowMood mood)
@@ -168,6 +173,53 @@ namespace CueGen.Workflow
                 .ToList();
             if (!before.SequenceEqual(after, StringComparer.Ordinal))
                 changes.Add(new WorkflowImportChange { Field = field, Before = before, After = after });
+        }
+
+        private void AddHotCueChange(
+            ICollection<WorkflowImportChange> changes,
+            RekordboxWorkflowRepository repository,
+            string contentId,
+            IList<WorkflowHotCue> desiredCues)
+        {
+            if (desiredCues == null)
+                return;
+
+            var before = repository.GetManagedHotCueStates(contentId, taxonomy);
+            var after = desiredCues
+                .Select(cue =>
+                {
+                    var mapping = taxonomy.HotCues[cue.Slot];
+                    return new WorkflowHotCueState
+                    {
+                        Slot = cue.Slot,
+                        Name = mapping.Name,
+                        Color = mapping.Color,
+                        ColorTableIndex = mapping.ColorTableIndex,
+                        PositionMs = cue.PositionMs.Value,
+                        LoopBeats = cue.LoopBeats
+                    };
+                })
+                .OrderBy(cue => cue.Slot, StringComparer.Ordinal)
+                .ToList();
+            if (!HotCueStatesEqual(before, after) || !repository.IsContentCueConsistent(contentId))
+                changes.Add(new WorkflowImportChange { Field = "hot_cues", Before = before, After = after });
+        }
+
+        private static bool HotCueStatesEqual(
+            IList<WorkflowHotCueState> before,
+            IList<WorkflowHotCueState> after)
+        {
+            return before.Count == after.Count && before.Zip(after, (left, right) =>
+                left.Slot == right.Slot &&
+                left.Name == right.Name &&
+                left.ColorTableIndex == right.ColorTableIndex &&
+                left.PositionMs == right.PositionMs &&
+                left.LoopBeats == right.LoopBeats).All(equal => equal);
+        }
+
+        private static IEnumerable<string> DesiredStatus(string status)
+        {
+            return status == null ? Enumerable.Empty<string>() : new[] { status };
         }
 
         private WorkflowImportResult Failure(string error)

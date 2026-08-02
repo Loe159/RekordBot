@@ -30,6 +30,9 @@ namespace CueGen.Workflow
         [JsonProperty("situations", Required = Required.Always)]
         public IList<string> Situations { get; set; }
 
+        [JsonProperty("hot_cues", Required = Required.Always)]
+        public IDictionary<string, WorkflowHotCueMapping> HotCues { get; set; }
+
         public static WorkflowTaxonomy Load(string path)
         {
             if (string.IsNullOrWhiteSpace(path))
@@ -88,5 +91,20 @@ namespace CueGen.Workflow
 
         [JsonProperty("color_id", Required = Required.Always)]
         public string ColorId { get; set; }
+    }
+
+    public sealed class WorkflowHotCueMapping
+    {
+        [JsonProperty("name", Required = Newtonsoft.Json.Required.Always)]
+        public string Name { get; set; }
+
+        [JsonProperty("color", Required = Newtonsoft.Json.Required.Always)]
+        public string Color { get; set; }
+
+        [JsonProperty("color_table_index", Required = Newtonsoft.Json.Required.Always)]
+        public int ColorTableIndex { get; set; }
+
+        [JsonProperty("required", Required = Newtonsoft.Json.Required.Always)]
+        public bool Required { get; set; }
     }
 }

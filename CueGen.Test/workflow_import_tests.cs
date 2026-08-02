@@ -63,7 +63,7 @@ namespace CueGen.Test
             var errors = validator.Validate(document);
 
             Assert.That(errors, Has.Some.Contains("schema_version"));
-            Assert.That(errors, Has.Some.Contains("phase 3 READY gate"));
+            Assert.That(errors, Has.Some.Contains("beatgrid_verified"));
             Assert.That(errors, Has.Some.Contains("must be unique"));
             Assert.That(errors, Has.Some.Contains("Not A Genre"));
             Assert.That(errors, Has.Some.Contains("yesterday"));
@@ -84,6 +84,32 @@ namespace CueGen.Test
             var errors = new WorkflowImportValidator(WorkflowTaxonomy.LoadDefault()).Validate(document);
 
             Assert.That(errors, Is.Empty);
+        }
+
+        [Test]
+        public void ValidatorRejectsNonCanonicalDuplicateAndUnverifiedHotCues()
+        {
+            var document = WorkflowImportParser.Parse(CreateJson(
+                "Hot Cues",
+                energy: 4,
+                includeMood: true,
+                genres: new[] { "House" },
+                yearOrigin: new[] { "2024" },
+                situations: new[] { "Main Floor" },
+                hotCues: new List<WorkflowHotCue>
+                {
+                    new() { Slot = "A", Name = "INTRO", Color = "Red", PositionMs = 0, PhraseStartVerified = false },
+                    new() { Slot = "A", Name = "IN-32", Color = "Green", PositionMs = 1000, PhraseStartVerified = true },
+                    new() { Slot = "H", Name = "LOOP", Color = "Cyan", PositionMs = 2000, PhraseStartVerified = true }
+                }));
+
+            var errors = new WorkflowImportValidator(WorkflowTaxonomy.LoadDefault()).Validate(document);
+
+            Assert.That(errors, Has.Some.Contains("must be unique"));
+            Assert.That(errors, Has.Some.Contains("must be named 'IN-32'"));
+            Assert.That(errors, Has.Some.Contains("must use color 'Green'"));
+            Assert.That(errors, Has.Some.Contains("first beat of a phrase"));
+            Assert.That(errors, Has.Some.Contains("8- or 16-beat loop"));
         }
 
         [Test]
@@ -188,7 +214,8 @@ namespace CueGen.Test
                 includeMood: true,
                 genres: new[] { "House", "Remix" },
                 yearOrigin: new[] { "2024" },
-                situations: new[] { "Peak Time" }));
+                situations: new[] { "Peak Time" },
+                hotCues: ReadyHotCues()));
 
             Assert.That(result.Success, Is.True, string.Join(Environment.NewLine, result.Errors));
             Assert.That(result.DryRun, Is.True);
@@ -244,6 +271,227 @@ namespace CueGen.Test
             Assert.That(File.ReadAllBytes(databasePath), Is.EqualTo(before));
         }
 
+        [Test]
+        public void ReadyImportWritesCanonicalSlotsPreservesManualCuesAndIsIdempotent()
+        {
+            const string manualCueId = "manual-hot-cue-d";
+            using (var database = OpenDatabase())
+            {
+                var content = database.Table<Content>().Single(item => item.ID == TargetContentId);
+                var now = DateTime.UtcNow;
+                database.Insert(new Cue
+                {
+                    ID = manualCueId,
+                    ContentID = content.ID,
+                    InMsec = 90000,
+                    InFrame = 13500,
+                    Kind = 5,
+                    Color = -1,
+                    ColorTableIndex = 5,
+                    Comment = "MANUAL BREAK",
+                    ContentUUID = content.UUID,
+                    UUID = Guid.NewGuid().ToString(),
+                    created_at = now,
+                    updated_at = now
+                });
+            }
+
+            var json = CreateJson(
+                null,
+                energy: 5,
+                includeMood: true,
+                genres: new[] { "House", "Remix" },
+                yearOrigin: new[] { "2024" },
+                situations: new[] { "Peak Time" },
+                hotCues: ReadyHotCues(),
+                beatgridVerified: true,
+                quantizeVerified: true);
+            var service = CreateService();
+            var first = service.ImportJson(json);
+
+            Assert.That(first.Success, Is.True, string.Join(Environment.NewLine, first.Errors));
+            Assert.That(first.Changes.Select(change => change.Field), Does.Contain("hot_cues"));
+            int cueCount;
+            using (var database = OpenDatabase())
+            {
+                var cues = database.Table<Cue>().Where(cue => cue.ContentID == TargetContentId).ToList();
+                cueCount = cues.Count;
+                Assert.That(cues.Any(cue => cue.ID == manualCueId && cue.Comment == "MANUAL BREAK"), Is.True);
+
+                var managed = cues
+                    .Where(cue => cue.UUID != null && cue.UUID.StartsWith("e134b57e-5bc1-4554-", StringComparison.Ordinal))
+                    .OrderBy(cue => cue.Kind)
+                    .ToList();
+                Assert.That(managed.Select(cue => cue.Kind), Is.EqualTo(new int?[] { 1, 3, 6 }));
+                Assert.That(managed.Select(cue => cue.Comment), Is.EqualTo(new[] { "IN-32", "DROP 1", "OUT-32" }));
+                Assert.That(managed.Select(cue => cue.ColorTableIndex), Is.EqualTo(new int?[] { 22, 42, 38 }));
+
+                var aggregate = database.Table<ContentCue>().Single(row => row.ContentID == TargetContentId);
+                var aggregateCues = JsonConvert.DeserializeObject<IList<Cue>>(aggregate.Cues);
+                Assert.That(aggregate.rb_cue_count, Is.EqualTo(cues.Count));
+                Assert.That(aggregateCues.Select(cue => cue.ID), Is.EquivalentTo(cues.Select(cue => cue.ID)));
+                Assert.That(GetAssigned(database, TargetContentId, "Status"), Is.Empty);
+            }
+
+            var repeated = service.ImportJson(json);
+            Assert.That(repeated.Success, Is.True, string.Join(Environment.NewLine, repeated.Errors));
+            Assert.That(repeated.Changes, Is.Empty);
+            using (var database = OpenDatabase())
+                Assert.That(database.Table<Cue>().Count(cue => cue.ContentID == TargetContentId), Is.EqualTo(cueCount));
+        }
+
+        [Test]
+        public void AllCanonicalHotCueSlotsUseExactKindsColorsAndLoopShape()
+        {
+            var result = CreateService().ImportJson(CreateJson(
+                "Hot Cues",
+                energy: 5,
+                includeMood: true,
+                genres: new[] { "House" },
+                yearOrigin: new[] { "2024" },
+                situations: new[] { "Peak Time" },
+                hotCues: AllHotCues()));
+
+            Assert.That(result.Success, Is.True, string.Join(Environment.NewLine, result.Errors));
+            using var database = OpenDatabase();
+            var managed = database.Table<Cue>()
+                .Where(cue => cue.ContentID == TargetContentId)
+                .ToList()
+                .Where(cue => cue.UUID != null && cue.UUID.StartsWith("e134b57e-5bc1-4554-", StringComparison.Ordinal))
+                .OrderBy(cue => cue.Kind)
+                .ToList();
+            Assert.That(managed.Select(cue => cue.Kind), Is.EqualTo(new int?[] { 1, 2, 3, 5, 6, 7, 8, 9 }));
+            Assert.That(managed.Select(cue => cue.ColorTableIndex), Is.EqualTo(new int?[] { 22, 32, 42, 5, 38, 56, 45, 9 }));
+            Assert.That(managed.Select(cue => cue.Comment), Is.EqualTo(new[]
+            {
+                "IN-32", "BUILD-16", "DROP 1", "BREAK", "OUT-32", "PEAK / DROP 2", "VOCAL / HOOK", "LOOP"
+            }));
+            var loop = managed.Single(cue => cue.Kind == 9);
+            Assert.That(loop.ActiveLoop, Is.EqualTo(1));
+            Assert.That(loop.Color, Is.EqualTo(255));
+            Assert.That(loop.BeatLoopSize, Is.EqualTo(0x10000 * 16 + 1));
+            Assert.That(loop.OutMsec, Is.GreaterThan(loop.InMsec));
+        }
+
+        [Test]
+        public void InvalidReadyRetainsHotCuesStatusWithoutMutation()
+        {
+            var staged = CreateService().ImportJson(CreateJson(
+                "Hot Cues",
+                energy: 4,
+                includeMood: true,
+                genres: new[] { "House" },
+                yearOrigin: new[] { "2024" },
+                situations: new[] { "Main Floor" }));
+            Assert.That(staged.Success, Is.True, string.Join(Environment.NewLine, staged.Errors));
+            var before = File.ReadAllBytes(databasePath);
+            var incomplete = ReadyHotCues().Where(cue => cue.Slot != "E").ToList();
+
+            var result = CreateService().ImportJson(CreateJson(
+                null,
+                energy: 4,
+                includeMood: true,
+                genres: new[] { "House" },
+                yearOrigin: new[] { "2024" },
+                situations: new[] { "Main Floor" },
+                hotCues: incomplete,
+                beatgridVerified: false,
+                quantizeVerified: true));
+
+            Assert.That(result.Success, Is.False);
+            Assert.That(result.Errors, Has.Some.Contains("beatgrid_verified"));
+            Assert.That(result.Errors, Has.Some.Contains("Hot Cues E"));
+            Assert.That(File.ReadAllBytes(databasePath), Is.EqualTo(before));
+            using (var database = OpenDatabase())
+                Assert.That(GetAssigned(database, TargetContentId, "Status"), Is.EqualTo(new[] { "Hot Cues" }));
+        }
+
+        [Test]
+        public void ManualHotCueCollisionStopsBeforeTransaction()
+        {
+            using (var database = OpenDatabase())
+            {
+                var content = database.Table<Content>().Single(item => item.ID == TargetContentId);
+                var now = DateTime.UtcNow;
+                database.Insert(new Cue
+                {
+                    ID = "manual-hot-cue-a",
+                    ContentID = content.ID,
+                    InMsec = 1000,
+                    InFrame = 150,
+                    Kind = 1,
+                    Color = -1,
+                    ContentUUID = content.UUID,
+                    UUID = Guid.NewGuid().ToString(),
+                    created_at = now,
+                    updated_at = now
+                });
+            }
+            var before = File.ReadAllBytes(databasePath);
+
+            var result = CreateService().ImportJson(CreateJson(
+                null,
+                energy: 5,
+                includeMood: true,
+                genres: new[] { "House" },
+                yearOrigin: new[] { "2024" },
+                situations: new[] { "Peak Time" },
+                hotCues: ReadyHotCues(),
+                beatgridVerified: true,
+                quantizeVerified: true));
+
+            Assert.That(result.Success, Is.False);
+            Assert.That(result.Errors, Has.Some.Contains("Manual Hot Cue A"));
+            Assert.That(File.ReadAllBytes(databasePath), Is.EqualTo(before));
+        }
+
+        [Test]
+        public void CueWriteFailureRollsBackStatusMetadataAndAggregate()
+        {
+            var service = CreateService();
+            var staged = service.ImportJson(CreateJson(
+                "Hot Cues",
+                energy: 3,
+                includeMood: true,
+                genres: new[] { "House" },
+                yearOrigin: new[] { "2024" },
+                situations: new[] { "Main Floor" }));
+            Assert.That(staged.Success, Is.True, string.Join(Environment.NewLine, staged.Errors));
+
+            int cueCount;
+            string aggregateJson;
+            using (var database = OpenDatabase())
+            {
+                cueCount = database.Table<Cue>().Count(cue => cue.ContentID == TargetContentId);
+                aggregateJson = database.Table<ContentCue>().Single(row => row.ContentID == TargetContentId).Cues;
+                database.Execute(
+                    "CREATE TRIGGER fail_workflow_cue BEFORE INSERT ON djmdCue " +
+                    "BEGIN SELECT RAISE(ABORT, 'forced cue failure'); END");
+            }
+
+            var result = service.ImportJson(CreateJson(
+                null,
+                energy: 5,
+                includeMood: true,
+                genres: new[] { "House" },
+                yearOrigin: new[] { "2024" },
+                situations: new[] { "Peak Time" },
+                hotCues: ReadyHotCues(),
+                beatgridVerified: true,
+                quantizeVerified: true));
+
+            Assert.That(result.Success, Is.False);
+            Assert.That(result.Errors, Has.Some.Contains("forced cue failure"));
+            using (var database = OpenDatabase())
+            {
+                var content = database.Table<Content>().Single(item => item.ID == TargetContentId);
+                Assert.That(content.Rating, Is.EqualTo(3));
+                Assert.That(GetAssigned(database, TargetContentId, "Status"), Is.EqualTo(new[] { "Hot Cues" }));
+                Assert.That(database.Table<Cue>().Count(cue => cue.ContentID == TargetContentId), Is.EqualTo(cueCount));
+                Assert.That(database.Table<ContentCue>().Single(row => row.ContentID == TargetContentId).Cues, Is.EqualTo(aggregateJson));
+            }
+        }
+
         private WorkflowImportService CreateService(bool dryRun = false)
         {
             return new WorkflowImportService(new Config
@@ -269,7 +517,10 @@ namespace CueGen.Test
             bool includeMood,
             IList<string> genres = null,
             IList<string> yearOrigin = null,
-            IList<string> situations = null)
+            IList<string> situations = null,
+            IList<WorkflowHotCue> hotCues = null,
+            bool? beatgridVerified = null,
+            bool? quantizeVerified = null)
         {
             var document = new WorkflowImportDocument
             {
@@ -285,6 +536,9 @@ namespace CueGen.Test
                 Status = status,
                 Mood = includeMood ? new WorkflowMood { Color = "Red", Label = "Énergie" } : null,
                 Energy = energy,
+                BeatgridVerified = beatgridVerified,
+                QuantizeVerified = quantizeVerified,
+                HotCues = hotCues,
                 MyTags = genres == null && yearOrigin == null && situations == null
                     ? null
                     : new WorkflowMyTags
@@ -294,10 +548,41 @@ namespace CueGen.Test
                         Situations = situations ?? new List<string>()
                     }
             };
-            return JsonConvert.SerializeObject(document, Formatting.Indented, new JsonSerializerSettings
+            var json = JsonConvert.SerializeObject(document, Formatting.Indented, new JsonSerializerSettings
             {
                 NullValueHandling = NullValueHandling.Ignore
             });
+            if (status != null)
+                return json;
+
+            var ready = JObject.Parse(json);
+            ready["status"] = JValue.CreateNull();
+            return ready.ToString();
+        }
+
+        private static IList<WorkflowHotCue> ReadyHotCues()
+        {
+            return new List<WorkflowHotCue>
+            {
+                new() { Slot = "A", Name = "IN-32", Color = "Green", PositionMs = 0, PhraseStartVerified = true },
+                new() { Slot = "C", Name = "DROP 1", Color = "Red", PositionMs = 60000, PhraseStartVerified = true },
+                new() { Slot = "E", Name = "OUT-32", Color = "Orange", PositionMs = 240000, PhraseStartVerified = true }
+            };
+        }
+
+        private static IList<WorkflowHotCue> AllHotCues()
+        {
+            return new List<WorkflowHotCue>
+            {
+                new() { Slot = "A", Name = "IN-32", Color = "Green", PositionMs = 0, PhraseStartVerified = true },
+                new() { Slot = "B", Name = "BUILD-16", Color = "Yellow", PositionMs = 30000, PhraseStartVerified = true },
+                new() { Slot = "C", Name = "DROP 1", Color = "Red", PositionMs = 60000, PhraseStartVerified = true },
+                new() { Slot = "D", Name = "BREAK", Color = "Blue", PositionMs = 90000, PhraseStartVerified = true },
+                new() { Slot = "E", Name = "OUT-32", Color = "Orange", PositionMs = 120000, PhraseStartVerified = true },
+                new() { Slot = "F", Name = "PEAK / DROP 2", Color = "Purple", PositionMs = 150000, PhraseStartVerified = true },
+                new() { Slot = "G", Name = "VOCAL / HOOK", Color = "Pink", PositionMs = 180000, PhraseStartVerified = true },
+                new() { Slot = "H", Name = "LOOP", Color = "Cyan", PositionMs = 210000, PhraseStartVerified = true, LoopBeats = 16 }
+            };
         }
 
         private static IList<string> GetAssigned(SQLiteConnection database, string contentId, string categoryName)

@@ -22,6 +22,15 @@ namespace CueGen.Workflow
 
         [JsonProperty("my_tags")]
         public WorkflowMyTags MyTags { get; set; }
+
+        [JsonProperty("beatgrid_verified")]
+        public bool? BeatgridVerified { get; set; }
+
+        [JsonProperty("quantize_verified")]
+        public bool? QuantizeVerified { get; set; }
+
+        [JsonProperty("hot_cues")]
+        public IList<WorkflowHotCue> HotCues { get; set; }
     }
 
     public sealed class WorkflowTrackIdentity
@@ -58,6 +67,37 @@ namespace CueGen.Workflow
 
         [JsonProperty("situations", Required = Required.Always)]
         public IList<string> Situations { get; set; }
+    }
+
+    public sealed class WorkflowHotCue
+    {
+        [JsonProperty("slot", Required = Required.Always)]
+        public string Slot { get; set; }
+
+        [JsonProperty("name", Required = Required.Always)]
+        public string Name { get; set; }
+
+        [JsonProperty("color", Required = Required.Always)]
+        public string Color { get; set; }
+
+        [JsonProperty("position_ms", Required = Required.Always)]
+        public int? PositionMs { get; set; }
+
+        [JsonProperty("phrase_start_verified", Required = Required.Always)]
+        public bool? PhraseStartVerified { get; set; }
+
+        [JsonProperty("loop_beats")]
+        public int? LoopBeats { get; set; }
+    }
+
+    public sealed class WorkflowHotCueState
+    {
+        public string Slot { get; set; }
+        public string Name { get; set; }
+        public string Color { get; set; }
+        public int? ColorTableIndex { get; set; }
+        public int PositionMs { get; set; }
+        public int? LoopBeats { get; set; }
     }
 
     public sealed class WorkflowImportChange

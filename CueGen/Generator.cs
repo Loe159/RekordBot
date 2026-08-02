@@ -1124,7 +1124,7 @@ namespace CueGen
             cue.Time = closestBar.Time;
         }
 
-        const string UUIDPrefix = "e134b57e-5bc1-4554-";
+        internal const string UUIDPrefix = "e134b57e-5bc1-4554-";
         static readonly int[] ColorTableIndexes = { 49, 56, 60, 62, 1, 5, 9, 14, 18, 22, 26, 30, 32, 38, 42, 45 };
         static readonly List<int> DefaultColorIndexes = new() { 1, 4, 6, 9, 12, 13, 14, 15 };
 
@@ -1167,15 +1167,20 @@ namespace CueGen
             return (color, colorIndex);
         }
 
-        int TimeToFrame(double time) => (int)((time * 150.0) / 1000.0);
+        internal static int TimeToFrame(double time) => (int)((time * 150.0) / 1000.0);
+
+        internal static string CreateManagedCueUuid(ulong id)
+        {
+            var idHex = id.ToString("x12");
+            return $"{UUIDPrefix}{idHex[0..4]}-{idHex[4..]}";
+        }
 
         Cue CreateCue(CuePoint cue, IList<Cue> cues, Content content, int cueNum, ulong maxId)
         {
             var frame = TimeToFrame(cue.Time);
             var date = DateTime.UtcNow;
             var kind = 0;
-            var maxIdHex = maxId.ToString("x12");
-            var uuid = $"{UUIDPrefix}{maxIdHex[0..4]}-{maxIdHex[4..]}";
+            var uuid = CreateManagedCueUuid(maxId);
             (var color, var colorIndex) = GetColor(cue, cueNum);
 
             var isHot = cue.Type == CueType.Hot || (cue.Type == CueType.Memory && Config.HotCues);
@@ -1213,7 +1218,8 @@ namespace CueGen
             return newCue;
         }
 
-        int BeatsToMs(int beats, int bpm) => (int)Math.Round(beats * 60.0 * 1000.0 * 100.0 / bpm);
+        internal static int BeatsToMs(int beats, int bpm) =>
+            (int)Math.Round(beats * 60.0 * 1000.0 * 100.0 / bpm);
         int MsToBeats(double ms, int bpm) => (int)Math.Round(bpm * (ms / (60.0 * 1000.0)) / 100.0);
         int Bars(double ms, int bpm) => MsToBeats(ms, bpm) / 4 + 1;
 

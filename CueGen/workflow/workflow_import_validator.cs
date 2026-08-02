@@ -31,6 +31,7 @@ namespace CueGen.Workflow
             ValidateMood(document.Mood, errors);
             ValidateEnergy(document.Energy, errors);
             ValidateMyTags(document.MyTags, errors);
+            ValidateHotCues(document.HotCues, errors);
             ValidateProgressiveRequirements(document, errors);
             return errors;
         }
@@ -57,10 +58,7 @@ namespace CueGen.Workflow
         private void ValidateStatus(string status, ICollection<string> errors)
         {
             if (status == null)
-            {
-                errors.Add("status cannot be null until the phase 3 READY gate is implemented");
                 return;
-            }
 
             if (!taxonomy.Statuses.Contains(status, StringComparer.Ordinal))
                 errors.Add($"Unknown status '{status}'");
@@ -139,8 +137,87 @@ namespace CueGen.Workflow
                 errors.Add($"{field} values must be unique");
         }
 
-        private static void ValidateProgressiveRequirements(WorkflowImportDocument document, ICollection<string> errors)
+        private void ValidateHotCues(IList<WorkflowHotCue> hotCues, ICollection<string> errors)
         {
+            if (hotCues == null)
+                return;
+
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var cue in hotCues)
+            {
+                if (cue == null)
+                {
+                    errors.Add("hot_cues cannot contain null");
+                    continue;
+                }
+
+                if (string.IsNullOrWhiteSpace(cue.Slot) || !taxonomy.HotCues.TryGetValue(cue.Slot, out var mapping))
+                {
+                    errors.Add($"Unknown hot_cues slot '{cue.Slot}'");
+                    continue;
+                }
+
+                if (!seen.Add(cue.Slot))
+                    errors.Add($"hot_cues slot '{cue.Slot}' must be unique");
+
+                if (!string.Equals(cue.Name, mapping.Name, StringComparison.Ordinal))
+                    errors.Add($"Hot Cue {cue.Slot} must be named '{mapping.Name}'");
+                if (!string.Equals(cue.Color, mapping.Color, StringComparison.Ordinal))
+                    errors.Add($"Hot Cue {cue.Slot} must use color '{mapping.Color}'");
+                if (!cue.PositionMs.HasValue || cue.PositionMs.Value < 0)
+                    errors.Add($"Hot Cue {cue.Slot} position_ms must be non-negative");
+                if (cue.PhraseStartVerified != true)
+                    errors.Add($"Hot Cue {cue.Slot} must be verified on the first beat of a phrase");
+
+                if (cue.Slot == "H")
+                {
+                    if (cue.LoopBeats != 8 && cue.LoopBeats != 16)
+                        errors.Add("Hot Cue H must define an 8- or 16-beat loop");
+                }
+                else if (cue.LoopBeats.HasValue)
+                {
+                    errors.Add($"Hot Cue {cue.Slot} cannot define loop_beats");
+                }
+            }
+        }
+
+        private void ValidateProgressiveRequirements(WorkflowImportDocument document, ICollection<string> errors)
+        {
+            if (document.Status == null)
+            {
+                if (document.Mood == null)
+                    errors.Add("mood is required for READY");
+                if (!document.Energy.HasValue)
+                    errors.Add("energy is required for READY");
+                if (document.MyTags == null)
+                    errors.Add("my_tags is required for READY");
+                else if (document.MyTags.Genres == null || document.MyTags.Genres.Count == 0)
+                    errors.Add("At least one genre is required for READY");
+                if (document.BeatgridVerified != true)
+                    errors.Add("beatgrid_verified must be true for READY");
+                if (document.QuantizeVerified != true)
+                    errors.Add("quantize_verified must be true for READY");
+                if (document.HotCues == null)
+                {
+                    errors.Add("hot_cues is required for READY");
+                }
+                else
+                {
+                    var present = new HashSet<string>(
+                        document.HotCues.Where(cue => cue != null).Select(cue => cue.Slot),
+                        StringComparer.Ordinal);
+                    var missing = taxonomy.HotCues
+                        .Where(pair => pair.Value.Required && !present.Contains(pair.Key))
+                        .Select(pair => pair.Key)
+                        .OrderBy(slot => slot, StringComparer.Ordinal)
+                        .ToList();
+                    if (missing.Count > 0)
+                        errors.Add($"READY requires Hot Cues {string.Join(", ", missing)}");
+                }
+
+                return;
+            }
+
             if (document.Status == "Energy" || document.Status == "Tags" || document.Status == "Hot Cues")
             {
                 if (document.Mood == null)
