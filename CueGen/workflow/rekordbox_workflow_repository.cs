@@ -13,6 +13,8 @@ namespace CueGen.Workflow
         private readonly IList<SongMyTag> relations;
         private readonly IList<Cue> cues;
         private readonly IList<ContentCue> contentCues;
+        private IList<Playlist> playlists;
+        private IList<SongPlaylist> playlistRelations;
         private long nextTagId;
         private long nextTagUsn;
         private long nextRelationUsn;
@@ -20,6 +22,11 @@ namespace CueGen.Workflow
         private ulong nextCueId;
         private long nextCueUsn;
         private long nextContentCueUsn;
+        private long nextPlaylistId;
+        private long nextPlaylistUsn;
+        private long nextPlaylistRelationUsn;
+
+        private const string WorkflowPlaylistUuidPrefix = "51facbf8-0bb1-4f78-";
 
         public RekordboxWorkflowRepository(SQLiteConnection database)
         {
@@ -57,6 +64,128 @@ namespace CueGen.Workflow
         public IList<Artist> GetArtists()
         {
             return database.Table<Artist>().ToList();
+        }
+
+        public void ValidatePlaylistPreflight(IList<string> desiredPaths)
+        {
+            if (desiredPaths == null)
+                return;
+
+            EnsurePlaylistState();
+            foreach (var path in desiredPaths)
+            {
+                var segments = new[] { WorkflowPlaylistPlan.RootName }
+                    .Concat(WorkflowPlaylistPlan.Split(path));
+                var parentId = "root";
+                var nodes = segments.ToList();
+                for (var index = 0; index < nodes.Count; index++)
+                {
+                    var segment = nodes[index];
+                    var matches = playlists
+                        .Where(playlist => playlist.ParentID == parentId && playlist.Name == segment)
+                        .ToList();
+                    if (matches.Count > 1)
+                        throw new InvalidOperationException($"Multiple playlists named '{segment}' exist under '{parentId}'");
+                    if (matches.Count == 0)
+                        break;
+
+                    var existing = matches[0];
+                    var isLeaf = index == nodes.Count - 1;
+                    var expectedAttribute = isLeaf ? 0 : 1;
+                    if (existing.Attribute != expectedAttribute || !IsManagedPlaylist(existing))
+                    {
+                        throw new InvalidOperationException(
+                            $"Playlist path '{path}' collides with an unmanaged Rekordbox item");
+                    }
+
+                    parentId = existing.ID;
+                }
+            }
+        }
+
+        public IList<string> GetManagedPlaylistPaths(string contentId)
+        {
+            EnsurePlaylistState();
+            var playlistIds = new HashSet<string>(
+                playlistRelations
+                    .Where(relation => relation.ContentID == contentId)
+                    .Select(relation => relation.PlaylistID),
+                StringComparer.Ordinal);
+            return playlists
+                .Where(playlist => playlistIds.Contains(playlist.ID) && playlist.Attribute == 0)
+                .Select(GetManagedPlaylistPath)
+                .Where(path => path != null)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+        }
+
+        public void SyncPlaylists(string contentId, IList<string> desiredPaths)
+        {
+            if (desiredPaths == null)
+                return;
+
+            EnsurePlaylistState();
+            var desired = desiredPaths
+                .Select(EnsurePlaylistPath)
+                .ToDictionary(playlist => playlist.ID, playlist => playlist, StringComparer.Ordinal);
+            var managedPlaylistIds = new HashSet<string>(
+                playlists
+                    .Where(playlist => playlist.Attribute == 0 && GetManagedPlaylistPath(playlist) != null)
+                    .Select(playlist => playlist.ID),
+                StringComparer.Ordinal);
+            var current = playlistRelations
+                .Where(relation => relation.ContentID == contentId && managedPlaylistIds.Contains(relation.PlaylistID))
+                .ToList();
+            var affectedPlaylists = new HashSet<string>(StringComparer.Ordinal);
+
+            foreach (var group in current.GroupBy(relation => relation.PlaylistID, StringComparer.Ordinal))
+            {
+                var keep = desired.ContainsKey(group.Key);
+                var keptOne = false;
+                foreach (var relation in group.OrderBy(relation => relation.TrackNo ?? int.MaxValue))
+                {
+                    if (keep && !keptOne)
+                    {
+                        keptOne = true;
+                        continue;
+                    }
+
+                    database.Delete(relation);
+                    playlistRelations.Remove(relation);
+                    affectedPlaylists.Add(relation.PlaylistID);
+                }
+            }
+
+            var currentIds = new HashSet<string>(
+                playlistRelations
+                    .Where(relation => relation.ContentID == contentId && managedPlaylistIds.Contains(relation.PlaylistID))
+                    .Select(relation => relation.PlaylistID),
+                StringComparer.Ordinal);
+            foreach (var playlist in desired.Values.Where(playlist => !currentIds.Contains(playlist.ID)))
+            {
+                var now = DateTime.UtcNow;
+                var relation = new SongPlaylist
+                {
+                    ID = Guid.NewGuid().ToString(),
+                    UUID = Guid.NewGuid().ToString(),
+                    PlaylistID = playlist.ID,
+                    ContentID = contentId,
+                    TrackNo = playlistRelations
+                        .Where(item => item.PlaylistID == playlist.ID)
+                        .Select(item => item.TrackNo ?? 0)
+                        .DefaultIfEmpty(0)
+                        .Max() + 1,
+                    rb_local_usn = ++nextPlaylistRelationUsn,
+                    created_at = now,
+                    updated_at = now
+                };
+                database.Insert(relation);
+                playlistRelations.Add(relation);
+            }
+
+            foreach (var playlistId in affectedPlaylists)
+                RenumberPlaylist(playlistId);
         }
 
         public IList<WorkflowHotCueState> GetManagedHotCueStates(
@@ -283,6 +412,166 @@ namespace CueGen.Workflow
             database.Insert(tag);
             tags.Add(tag);
             return tag;
+        }
+
+        private void EnsurePlaylistState()
+        {
+            if (playlists != null)
+                return;
+
+            foreach (var tableName in new[] { "djmdPlaylist", "djmdSongPlaylist" })
+            {
+                var count = database.ExecuteScalar<int>(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?",
+                    tableName);
+                if (count != 1)
+                {
+                    throw new InvalidOperationException(
+                        $"Rekordbox playlist table '{tableName}' is unavailable; no playlist was changed");
+                }
+            }
+
+            playlists = database.Table<Playlist>().ToList();
+            playlistRelations = database.Table<SongPlaylist>().ToList();
+            nextPlaylistId = playlists
+                .Select(playlist => long.TryParse(
+                    playlist.ID,
+                    NumberStyles.None,
+                    CultureInfo.InvariantCulture,
+                    out var id) ? id : 0L)
+                .DefaultIfEmpty(0L)
+                .Max();
+            nextPlaylistUsn = playlists
+                .Select(playlist => playlist.rb_local_usn ?? 0L)
+                .DefaultIfEmpty(0L)
+                .Max();
+            nextPlaylistRelationUsn = playlistRelations
+                .Select(relation => relation.rb_local_usn ?? 0L)
+                .DefaultIfEmpty(0L)
+                .Max();
+        }
+
+        private Playlist EnsurePlaylistPath(string path)
+        {
+            var segments = new[] { WorkflowPlaylistPlan.RootName }
+                .Concat(WorkflowPlaylistPlan.Split(path))
+                .ToList();
+            var parentId = "root";
+            Playlist current = null;
+            for (var index = 0; index < segments.Count; index++)
+            {
+                var attribute = index == segments.Count - 1 ? 0 : 1;
+                current = EnsurePlaylist(segments[index], parentId, attribute, path);
+                parentId = current.ID;
+            }
+
+            return current;
+        }
+
+        private Playlist EnsurePlaylist(string name, string parentId, int attribute, string requestedPath)
+        {
+            var matches = playlists
+                .Where(playlist => playlist.ParentID == parentId && playlist.Name == name)
+                .ToList();
+            if (matches.Count > 1)
+                throw new InvalidOperationException($"Multiple playlists named '{name}' exist under '{parentId}'");
+            if (matches.Count == 1)
+            {
+                var existing = matches[0];
+                if (existing.Attribute != attribute || !IsManagedPlaylist(existing))
+                {
+                    throw new InvalidOperationException(
+                        $"Playlist path '{requestedPath}' collides with an unmanaged Rekordbox item");
+                }
+
+                return existing;
+            }
+
+            if (nextPlaylistId >= 0x0fffffff)
+                throw new InvalidOperationException("No Rekordbox playlist ID is available");
+
+            var now = DateTime.UtcNow;
+            var playlist = new Playlist
+            {
+                ID = (++nextPlaylistId).ToString(CultureInfo.InvariantCulture),
+                Seq = playlists
+                    .Where(item => item.ParentID == parentId)
+                    .Select(item => item.Seq ?? 0)
+                    .DefaultIfEmpty(0)
+                    .Max() + 1,
+                Name = name,
+                Attribute = attribute,
+                ParentID = parentId,
+                UUID = CreateManagedPlaylistUuid(nextPlaylistId),
+                rb_local_usn = ++nextPlaylistUsn,
+                created_at = now,
+                updated_at = now
+            };
+            database.Insert(playlist);
+            playlists.Add(playlist);
+            return playlist;
+        }
+
+        private string GetManagedPlaylistPath(Playlist playlist)
+        {
+            if (!IsManagedPlaylist(playlist))
+                return null;
+
+            var byId = playlists.ToDictionary(item => item.ID, StringComparer.Ordinal);
+            var segments = new List<string>();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var current = playlist;
+            while (current != null)
+            {
+                if (!seen.Add(current.ID))
+                    throw new InvalidOperationException("A cycle exists in the managed playlist hierarchy");
+                if (!IsManagedPlaylist(current))
+                    return null;
+
+                segments.Add(current.Name);
+                if (current.ParentID == "root")
+                    break;
+                if (!byId.TryGetValue(current.ParentID, out current))
+                    return null;
+            }
+
+            segments.Reverse();
+            if (segments.Count != 3 || segments[0] != WorkflowPlaylistPlan.RootName)
+                return null;
+            return string.Join("/", segments.Skip(1));
+        }
+
+        private void RenumberPlaylist(string playlistId)
+        {
+            var now = DateTime.UtcNow;
+            var ordered = playlistRelations
+                .Where(relation => relation.PlaylistID == playlistId)
+                .OrderBy(relation => relation.TrackNo ?? int.MaxValue)
+                .ThenBy(relation => relation.ID, StringComparer.Ordinal)
+                .ToList();
+            for (var index = 0; index < ordered.Count; index++)
+            {
+                var trackNo = index + 1;
+                if (ordered[index].TrackNo == trackNo)
+                    continue;
+
+                ordered[index].TrackNo = trackNo;
+                ordered[index].rb_local_usn = ++nextPlaylistRelationUsn;
+                ordered[index].updated_at = now;
+                database.Update(ordered[index]);
+            }
+        }
+
+        private static bool IsManagedPlaylist(Playlist playlist)
+        {
+            return playlist.UUID != null &&
+                playlist.UUID.StartsWith(WorkflowPlaylistUuidPrefix, StringComparison.Ordinal);
+        }
+
+        private static string CreateManagedPlaylistUuid(long id)
+        {
+            var idHex = id.ToString("x16", CultureInfo.InvariantCulture);
+            return $"{WorkflowPlaylistUuidPrefix}{idHex.Substring(0, 4)}-{idHex.Substring(4)}";
         }
 
         private MyTag FindSingleTag(string name, string parentId, bool required)

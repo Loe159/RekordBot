@@ -53,6 +53,14 @@
         {"contains": {"properties": {"slot": {"const": "G"}}}, "minContains": 0, "maxContains": 1},
         {"contains": {"properties": {"slot": {"const": "H"}}}, "minContains": 0, "maxContains": 1}
       ]
+    },
+    "desired_playlists": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^(?:Preparation/(?:To Do|Mood|Energy|Tags|Hot Cues|READY)|Mood/[^/\\\\]+|Energy/[1-5]|Genre/[^/\\\\]+|Ann\\u00e9e/[^/\\\\]+|Situation/[^/\\\\]+)$"
+      }
     }
   },
   "allOf": [

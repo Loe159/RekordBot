@@ -66,6 +66,7 @@ namespace CueGen.Workflow
                     artists,
                     databasePath);
                 repository.ValidateHotCuePreflight(content, document.HotCues);
+                repository.ValidatePlaylistPreflight(document.DesiredPlaylists);
                 var changes = BuildChanges(repository, content, document);
 
                 if (!config.DryRun && changes.Count > 0)
@@ -118,6 +119,7 @@ namespace CueGen.Workflow
             }
 
             AddHotCueChange(changes, repository, content.ID, document.HotCues);
+            AddPlaylistChange(changes, repository, content.ID, document.DesiredPlaylists);
 
             return changes;
         }
@@ -139,6 +141,7 @@ namespace CueGen.Workflow
             }
 
             repository.SyncHotCues(content, document.HotCues, taxonomy);
+            repository.SyncPlaylists(content.ID, document.DesiredPlaylists);
         }
 
         private WorkflowMoodMapping GetMood(WorkflowMood mood)
@@ -215,6 +218,28 @@ namespace CueGen.Workflow
                 left.ColorTableIndex == right.ColorTableIndex &&
                 left.PositionMs == right.PositionMs &&
                 left.LoopBeats == right.LoopBeats).All(equal => equal);
+        }
+
+        private static void AddPlaylistChange(
+            ICollection<WorkflowImportChange> changes,
+            RekordboxWorkflowRepository repository,
+            string contentId,
+            IList<string> desiredPaths)
+        {
+            if (desiredPaths == null)
+                return;
+
+            var before = repository.GetManagedPlaylistPaths(contentId);
+            var after = desiredPaths.OrderBy(path => path, StringComparer.Ordinal).ToList();
+            if (!before.SequenceEqual(after, StringComparer.Ordinal))
+            {
+                changes.Add(new WorkflowImportChange
+                {
+                    Field = "desired_playlists",
+                    Before = before,
+                    After = after
+                });
+            }
         }
 
         private static IEnumerable<string> DesiredStatus(string status)

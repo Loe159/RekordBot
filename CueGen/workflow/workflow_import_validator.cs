@@ -33,6 +33,7 @@ namespace CueGen.Workflow
             ValidateMyTags(document.MyTags, errors);
             ValidateHotCues(document.HotCues, errors);
             ValidateProgressiveRequirements(document, errors);
+            ValidateDesiredPlaylists(document, errors);
             return errors;
         }
 
@@ -237,6 +238,39 @@ namespace CueGen.Workflow
                 else if (document.MyTags.Genres == null || document.MyTags.Genres.Count == 0)
                     errors.Add("At least one genre is required when status is Hot Cues");
             }
+        }
+
+        private void ValidateDesiredPlaylists(
+            WorkflowImportDocument document,
+            ICollection<string> errors)
+        {
+            if (document.DesiredPlaylists == null)
+                return;
+
+            ValidateUnique("desired_playlists", document.DesiredPlaylists, errors);
+            foreach (var path in document.DesiredPlaylists.Where(path => !string.IsNullOrWhiteSpace(path)))
+            {
+                var segments = WorkflowPlaylistPlan.Split(path);
+                if (segments.Length != 2 ||
+                    segments.Any(segment => string.IsNullOrWhiteSpace(segment) || segment == "." || segment == "..") ||
+                    path.Contains('\\'))
+                {
+                    errors.Add($"Invalid desired_playlists path '{path}'");
+                }
+            }
+
+            var expected = WorkflowPlaylistPlan.BuildExpectedPaths(document, taxonomy);
+            var desired = document.DesiredPlaylists
+                .Where(path => !string.IsNullOrWhiteSpace(path))
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+            var missing = expected.Except(desired, StringComparer.Ordinal).ToList();
+            var unexpected = desired.Except(expected, StringComparer.Ordinal).ToList();
+            if (missing.Count > 0)
+                errors.Add($"desired_playlists is missing: {string.Join(", ", missing)}");
+            if (unexpected.Count > 0)
+                errors.Add($"desired_playlists contains unexpected paths: {string.Join(", ", unexpected)}");
         }
     }
 }

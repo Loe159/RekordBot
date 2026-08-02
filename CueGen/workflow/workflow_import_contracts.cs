@@ -31,6 +31,9 @@ namespace CueGen.Workflow
 
         [JsonProperty("hot_cues")]
         public IList<WorkflowHotCue> HotCues { get; set; }
+
+        [JsonProperty("desired_playlists")]
+        public IList<string> DesiredPlaylists { get; set; }
     }
 
     public sealed class WorkflowTrackIdentity

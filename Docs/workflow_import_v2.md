@@ -1,4 +1,4 @@
-# Workflow import 2.0 - phases 2 and 3
+# Workflow import 2.0 - phases 2 to 4
 
 This import mode applies metadata and preparation status to one existing Rekordbox
 content row, and can synchronize explicit Hot Cues. It does not run Beatport,
@@ -41,7 +41,18 @@ Example:
   },
   "beatgrid_verified": false,
   "quantize_verified": false,
-  "hot_cues": []
+  "hot_cues": [],
+  "desired_playlists": [
+    "Preparation/Hot Cues",
+    "Mood/\u00c9nergie",
+    "Energy/5",
+    "Genre/House",
+    "Genre/Techno",
+    "Ann\u00e9e/2024",
+    "Ann\u00e9e/90FR",
+    "Situation/Main Floor",
+    "Situation/Peak Time"
+  ]
 }
 ```
 
@@ -84,3 +95,52 @@ already occupies a requested slot, the import fails before mutation instead of
 overwriting it. After a cue change, `djmdCue`, the complete JSON cue list in
 `contentCue.Cues`, and `contentCue.rb_cue_count` are updated in the same
 transaction.
+
+## Managed playlists
+
+`desired_playlists` is optional so phase 2/3 documents remain compatible. Once a
+workflow starts managing playlists for a track, include it in every later import
+for that track. RekordBot treats the list as the complete desired membership set.
+
+Paths are relative to a managed top-level `RekordBot` folder and have exactly two
+segments. The required plan is derived from the fields in the same document:
+
+- `Preparation/<status>` or `Preparation/READY`: exactly one membership.
+- `Mood/<label>` when mood is present.
+- `Energy/<rating>` when energy is present.
+- `Genre/<tag>`, `Ann\u00e9e/<tag>`, and `Situation/<tag>` for every grouped tag.
+
+When `desired_playlists` is present, validation rejects missing, extra, duplicate,
+or non-canonical paths. Preparation memberships are therefore mutually exclusive,
+while all classification memberships can overlap.
+
+RekordBot creates only normal playlists and folders carrying its managed UUID
+prefix. A user-created item colliding with a requested `RekordBot` path stops the
+import before the transaction. Other folders, playlists, memberships, and their
+track order are preserved. Playlist definitions are retained when they become
+empty; only the imported track's managed memberships are synchronized.
+
+Playlist writes require the Rekordbox `djmdPlaylist` and `djmdSongPlaylist` tables.
+If either table is unavailable or incompatible, the import fails explicitly and
+does not fall back to claiming success. Mood, rating, My Tags, cues, playlists,
+and aggregate cue JSON are committed in one transaction, so a playlist failure
+rolls back the whole track.
+
+## Isolated Rekordbox UI verification
+
+The automated tests use a disposable copy of `test.db`; they do not open a live
+Rekordbox library. Before release, complete this manual check in an isolated
+Rekordbox profile:
+
+1. Keep the production library closed and retain its verified backup.
+2. Import the fixture tracks into the isolated profile, then close Rekordbox.
+3. Run one dry-run and one real import against the isolated `master.db` copy.
+4. Reopen only the isolated profile.
+5. Verify one preparation membership per track, overlapping mood/energy/tag
+   classifications, stable track order, and no change to user playlists.
+6. Repeat the same import and verify that the UI shows no duplicate folder,
+   playlist, or track membership.
+
+Do not treat automated SQLite assertions as proof that a new Rekordbox version
+renders or synchronizes the rows correctly. A schema/UI mismatch is a release
+blocker, not permission to test against the production database.
