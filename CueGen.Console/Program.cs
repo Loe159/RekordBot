@@ -17,7 +17,6 @@ namespace CueGen.Console
     {
         static readonly Logger Log = LogManager.GetCurrentClassLogger();
         readonly Config Config = new();
-        bool Error = false;
         bool Backup = true;
         bool ReportProgress = true;
 
@@ -65,7 +64,7 @@ namespace CueGen.Console
                         { "comment=", "Comment template, # will be replaced by energy level (default is \"Energy #\")", v => program.Config.Comment = v },
                         { "g|glob=", "File glob of track file paths to include, e.g. C:\\Music\\*.mp3 (default is all in Rekordbox database)", v => program.Config.FileGlob = v },
                         { "r|remove", "Remove all cue points created through this program", v => program.Config.RemoveOnly = v != null },
-                        { "b|backup", "Create database backup before creating cue points (default is enabled)", v => program.Backup = v != null },
+                        { "b|backup", "Require a verified database backup before mutation (mandatory unless dry-run)", v => program.Backup = v != null },
                         { "s|snap", "Snap cue points to nearest bar (default is enabled)", v => program.Config.SnapToBar = v != null },
                         { "p|phrase", "Create cue points from phrases (default is disabled)", v => program.Config.PhraseCues = v != null },
                         { "my|mytag", "Create MyTag with energy level (default is disabled)", v => program.Config.MyTagEnergy = v != null },
@@ -95,7 +94,9 @@ namespace CueGen.Console
                         { "scapikey=", "Soundcharts API Key (overrides default)", v => program.Config.SoundchartsApiKey = v },
                     };
 
-                    options.Parse(args);
+                    var remainingArguments = options.Parse(args);
+                    if (remainingArguments.Count > 0)
+                        throw new OptionException($"Unknown argument: {remainingArguments[0]}", remainingArguments[0]);
 
                     if (showHelp)
                     {
@@ -162,9 +163,7 @@ namespace CueGen.Console
                     return 1;
                 }
 
-                program.Generate();
-
-                return program.Error ? 1 : 0;
+                return program.Generate() ? 0 : 1;
             }
             catch (Exception ex)
             {
@@ -221,7 +220,7 @@ namespace CueGen.Console
 
         static string Version => typeof(Generator).Assembly.GetCustomAttribute<AssemblyFileVersionAttribute>().Version;
 
-        void Generate()
+        bool Generate()
         {
             Log.Info("Starting CueGen version {version}", Version);
 
@@ -241,13 +240,28 @@ namespace CueGen.Console
                 Config.DatabasePath = db;
             }
 
-            if (Backup)
+            Config.DatabasePath = RekordboxSafety.ValidateDatabase(Config.DatabasePath);
+
+            if (!Config.DryRun)
             {
-                var dir = Path.GetDirectoryName(Config.DatabasePath);
-                var fn = Path.GetFileNameWithoutExtension(Config.DatabasePath);
-                var backupPath = Path.Combine(dir, $"{fn}.backup.{DateTime.Now:yyyy-MM-dd-HH-mm-ss}.db");
-                Log.Info("Creating database backup at {path}", backupPath);
-                File.Copy(Config.DatabasePath, backupPath);
+                if (RekordboxSafety.IsRekordboxRunning())
+                {
+                    Log.Error("Rekordbox is running. Close it before changing the database");
+                    return false;
+                }
+
+                if (!Backup)
+                {
+                    Log.Error("A verified database backup is mandatory before mutation");
+                    return false;
+                }
+
+                var backupPath = RekordboxSafety.CreateVerifiedBackup(Config.DatabasePath);
+                Log.Info("Created and verified database backup at {path}", backupPath);
+            }
+            else
+            {
+                Log.Info("Dry run: database backup skipped because no mutation is allowed");
             }
 
             var generator = new Generator(Config);
@@ -262,8 +276,7 @@ namespace CueGen.Console
                 };
             }
 
-            if (!generator.Generate())
-                Error = true;
+            return generator.Generate();
         }
     }
 }

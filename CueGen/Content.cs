@@ -207,6 +207,12 @@ namespace CueGen
 
             beats = new List<AnlzBeat>(newBeats);
 
+            if (config.DryRun)
+            {
+                Log.Info("Dry run: would save beats for {contentID}", ID);
+                return;
+            }
+
             var analysisDataPath = AnalysisDataPath;
             if (string.IsNullOrEmpty(analysisDataPath))
             {

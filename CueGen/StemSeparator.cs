@@ -18,18 +18,20 @@ namespace CueGen
         private static readonly Logger Log = LogManager.GetCurrentClassLogger();
         private readonly string _outputDirectory;
         private readonly string _demucsCommand;
+        private readonly bool _dryRun;
 
         /// <summary>
         /// Initializes a new instance of the StemSeparator class
         /// </summary>
         /// <param name="outputDirectory">Base directory where separated stems will be stored</param>
         /// <param name="demucsCommand">Path to demucs executable or command (default: "python")</param>
-        public StemSeparator(string outputDirectory, string demucsCommand = "python")
+        public StemSeparator(string outputDirectory, string demucsCommand = "python", bool dryRun = false)
         {
             _outputDirectory = outputDirectory ?? throw new ArgumentNullException(nameof(outputDirectory));
             _demucsCommand = demucsCommand;
+            _dryRun = dryRun;
 
-            if (!Directory.Exists(_outputDirectory))
+            if (!_dryRun && !Directory.Exists(_outputDirectory))
             {
                 Directory.CreateDirectory(_outputDirectory);
                 Log.Info("Created output directory: {directory}", _outputDirectory);
@@ -65,6 +67,12 @@ namespace CueGen
 
             var vocalsFile = Path.Combine(fileDirectory, $"{fileName}_vocal." + extension);
             var instrumentalFile = Path.Combine(fileDirectory, $"{fileName}_instrumental." + extension);
+
+            if (_dryRun)
+            {
+                Log.Info("Dry run: would separate {file} into {vocals} and {instrumental}", audioFilePath, vocalsFile, instrumentalFile);
+                return true;
+            }
 
             // Check if stems already exist
             if (File.Exists(vocalsFile) && File.Exists(instrumentalFile))
@@ -319,6 +327,12 @@ namespace CueGen
                 return false;
             }
 
+            if (_dryRun)
+            {
+                Log.Info("Dry run: would copy metadata to existing stems for {file}", audioFilePath);
+                return true;
+            }
+
             var vocalsPath = GetVocalsPath(audioFilePath);
             var instrumentalPath = GetInstrumentalPath(audioFilePath);
 
@@ -373,6 +387,12 @@ namespace CueGen
         /// <returns>Dictionary mapping stem paths to their analysis data paths (relative to share folder), or null if failed</returns>
         public Dictionary<string, (string Path, bool Copied)> CopyAnalysisToStems(SQLiteConnection db, Content parent, Config config)
         {
+            if (_dryRun || config.DryRun)
+            {
+                Log.Info("Dry run: would synchronize analysis files for stems of {file}", parent.FolderPath);
+                return new Dictionary<string, (string Path, bool Copied)>();
+            }
+
             var vocalsPath = GetVocalsPath(parent.FolderPath);
             var instrumentalPath = GetInstrumentalPath(parent.FolderPath);
 
@@ -637,6 +657,12 @@ namespace CueGen
         /// <returns>True if entries were created successfully, false otherwise</returns>
         public bool UpdateStemContentEntries(SQLiteConnection db, Content parentContent, string parentAudioPath, Dictionary<string, (string Path, bool Copied)> analysisPathMap = null)
         {
+            if (_dryRun)
+            {
+                Log.Info("Dry run: would synchronize database entries for stems of {file}", parentAudioPath);
+                return true;
+            }
+
             var vocalsPath = GetVocalsPath(parentAudioPath);
             var instrumentalPath = GetInstrumentalPath(parentAudioPath);
 

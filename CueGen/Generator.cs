@@ -20,7 +20,13 @@ namespace CueGen
         static readonly Logger Log = LogManager.GetCurrentClassLogger();
 
         public Config Config { get; set; }
-        public SQLiteConnectionString ConnectionString { get; set; }
+        public SQLiteConnectionString ConnectionString => new(Config.DatabasePath,
+            openFlags: Config.DryRun
+                ? SQLiteOpenFlags.ReadOnly
+                : SQLiteOpenFlags.Create | SQLiteOpenFlags.ReadWrite,
+            storeDateTimeAsTicks: false,
+            key: Config.UseSqlCipher ? "402fd482c38817c35ffa8ffb8c7d93143b749e7d315df7a81732a1ff43608497" : null,
+            dateTimeStringFormat: "yyyy'-'MM'-'dd'T'HH':'mm':'ss'.'fffzzz");
 
         public Progress<Status> Progress { get; } = new Progress<Status>();
 
@@ -32,11 +38,6 @@ namespace CueGen
         public Generator(Config config)
         {
             Config = config;
-            ConnectionString = new SQLiteConnectionString(Config.DatabasePath,
-                openFlags: SQLiteOpenFlags.Create | SQLiteOpenFlags.ReadWrite,
-                storeDateTimeAsTicks: false,
-                key: Config.UseSqlCipher ? "402fd482c38817c35ffa8ffb8c7d93143b749e7d315df7a81732a1ff43608497" : null,
-                dateTimeStringFormat: "yyyy'-'MM'-'dd'T'HH':'mm':'ss'.'fffzzz");
         }
 
         public IList<Cue> GetCues()
@@ -316,6 +317,19 @@ namespace CueGen
 
         public bool Generate()
         {
+            if (Config.SeparateStems && string.IsNullOrEmpty(Config.StemsOutputDirectory))
+            {
+                Log.Error("StemsOutputDirectory must be configured when SeparateStems is enabled");
+                return false;
+            }
+
+            if (Config.UpdateFromBeatport &&
+                (string.IsNullOrWhiteSpace(Config.BeatportUsername) || string.IsNullOrWhiteSpace(Config.BeatportPassword)))
+            {
+                Log.Error("Beatport credentials are required when Beatport metadata is enabled");
+                return false;
+            }
+
             var contents = GetContents();
             var error = false;
             var maxId = GetMaxId() + 1;
@@ -328,13 +342,7 @@ namespace CueGen
             StemSeparator stemSeparator = null;
             if (Config.SeparateStems)
             {
-                if (string.IsNullOrEmpty(Config.StemsOutputDirectory))
-                {
-                    Log.Error("StemsOutputDirectory must be configured when SeparateStems is enabled");
-                    return true;
-                }
-
-                stemSeparator = new StemSeparator(Config.StemsOutputDirectory, Config.DemucsCommand);
+                stemSeparator = new StemSeparator(Config.StemsOutputDirectory, Config.DemucsCommand, Config.DryRun);
                 Log.Info("Stem separation enabled. Output directory: {directory}", Config.StemsOutputDirectory);
             }
 
@@ -365,13 +373,6 @@ namespace CueGen
             if (Config.UpdateFromSoundcharts)
             {
                 Log.Warn("Soundcharts metadata updates are not connected to the generation flow and were skipped");
-            }
-
-            if (Config.UpdateFromBeatport &&
-                (string.IsNullOrWhiteSpace(Config.BeatportUsername) || string.IsNullOrWhiteSpace(Config.BeatportPassword)))
-            {
-                Log.Error("Beatport credentials are required when Beatport metadata is enabled");
-                return true;
             }
 
             using var beatportClient = Config.UpdateFromBeatport
@@ -439,6 +440,11 @@ namespace CueGen
                 // Perform stem separation if enabled
                 if (stemSeparator != null && !Config.RemoveOnly)
                 {
+                    if (Config.DryRun)
+                    {
+                        Log.Info("Dry run: would separate stems and synchronize their metadata for {contentID}", content.ID);
+                    }
+                    else
                     try
                     {
                         Log.Info("Starting stem separation for {contentID} at {path}", content.ID, content.FolderPath);
@@ -469,6 +475,7 @@ namespace CueGen
                         else
                         {
                             Log.Warn("Stem separation failed for {contentID}", content.ID);
+                            error = true;
                         }
                     }
                     catch (Exception ex)
@@ -519,7 +526,7 @@ namespace CueGen
 
             Log.Info($"Finished cue points creation {(error ? "with" : "without")} errors");
 
-            return error;
+            return !error;
         }
 
         private void CreateColorEnergy(Content content, SQLiteConnection db)
@@ -532,7 +539,8 @@ namespace CueGen
                 var colorId = 9 - energy;
                 Log.Info("Setting color for {contentId} to energy {energy} (color id {colorId})", content.ID, energy, colorId);
                 content.ColorID = colorId.ToString();
-                db.Update(content);
+                if (!Config.DryRun)
+                    db.Update(content);
             }
             else
             {
@@ -581,7 +589,8 @@ namespace CueGen
                     .Where(t => t.Energy != null && t.Tag.MyTagID != energyMyTag.ID))
                 {
                     Log.Info("Removing Energy MyTag {energy} for {contentId}", myTag.Energy.Seq, content.ID);
-                    db.Delete(myTag.Tag);
+                    if (!Config.DryRun)
+                        db.Delete(myTag.Tag);
                 }
             }
             else

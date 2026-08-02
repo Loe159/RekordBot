@@ -204,12 +204,28 @@ namespace CueGen.Test
         [Test]
         public void DryRunTest()
         {
+            var databasePath = Gen.Config.DatabasePath;
+            var databaseBefore = File.ReadAllBytes(databasePath);
             Gen.Config.MyTagEnergy = true;
             Gen.Config.ColorEnergy = true;
             Gen.Config.DryRun = true;
-            Gen.Generate();
+            Assert.That(Gen.Generate(), Is.True);
+            Assert.That(File.ReadAllBytes(databasePath), Is.EqualTo(databaseBefore));
 
             AssertContent();
+
+            Assert.That(Gen.Generate(), Is.True);
+            Assert.That(File.ReadAllBytes(databasePath), Is.EqualTo(databaseBefore));
+        }
+
+        [Test]
+        public void GenerateReturnsFalseForInvalidStemConfiguration()
+        {
+            var databaseBefore = File.ReadAllBytes(Gen.Config.DatabasePath);
+            Gen.Config.SeparateStems = true;
+
+            Assert.That(Gen.Generate(), Is.False);
+            Assert.That(File.ReadAllBytes(Gen.Config.DatabasePath), Is.EqualTo(databaseBefore));
         }
 
         [Test]
