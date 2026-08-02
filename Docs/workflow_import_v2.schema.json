@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rekordbot.local/schemas/workflow-import-v2.json",
+  "title": "RekordBot workflow metadata import",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "track", "status"],
+  "properties": {
+    "schema_version": {"const": "2.0"},
+    "track": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "isrc": {"type": "string", "minLength": 1},
+        "title": {"type": "string", "minLength": 1},
+        "artist": {"type": "string", "minLength": 1}
+      },
+      "anyOf": [
+        {"required": ["isrc"]},
+        {"required": ["title"]},
+        {"required": ["artist"]}
+      ]
+    },
+    "status": {"enum": ["To Do", "Mood", "Energy", "Tags", "Hot Cues"]},
+    "mood": {
+      "oneOf": [
+        {"$ref": "#/$defs/mood_pink"},
+        {"$ref": "#/$defs/mood_red"},
+        {"$ref": "#/$defs/mood_orange"},
+        {"$ref": "#/$defs/mood_yellow"},
+        {"$ref": "#/$defs/mood_green"},
+        {"$ref": "#/$defs/mood_blue"},
+        {"$ref": "#/$defs/mood_dark_blue"},
+        {"$ref": "#/$defs/mood_purple"}
+      ]
+    },
+    "energy": {"type": "integer", "minimum": 1, "maximum": 5},
+    "my_tags": {"$ref": "#/$defs/my_tags"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"status": {"enum": ["Energy", "Tags", "Hot Cues"]}}},
+      "then": {"required": ["mood"]}
+    },
+    {
+      "if": {"properties": {"status": {"enum": ["Tags", "Hot Cues"]}}},
+      "then": {"required": ["energy"]}
+    },
+    {
+      "if": {"properties": {"status": {"const": "Hot Cues"}}},
+      "then": {"required": ["my_tags"]}
+    }
+  ],
+  "$defs": {
+    "mood_base": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["color", "label"]
+    },
+    "mood_pink": {"allOf": [{"$ref": "#/$defs/mood_base"}, {"properties": {"color": {"const": "Pink"}, "label": {"const": "Sexy"}}}]},
+    "mood_red": {"allOf": [{"$ref": "#/$defs/mood_base"}, {"properties": {"color": {"const": "Red"}, "label": {"const": "\u00c9nergie"}}}]},
+    "mood_orange": {"allOf": [{"$ref": "#/$defs/mood_base"}, {"properties": {"color": {"const": "Orange"}, "label": {"const": "Sombre"}}}]},
+    "mood_yellow": {"allOf": [{"$ref": "#/$defs/mood_base"}, {"properties": {"color": {"const": "Yellow"}, "label": {"const": "Joie"}}}]},
+    "mood_green": {"allOf": [{"$ref": "#/$defs/mood_base"}, {"properties": {"color": {"const": "Green"}, "label": {"const": "Ambiant"}}}]},
+    "mood_blue": {"allOf": [{"$ref": "#/$defs/mood_base"}, {"properties": {"color": {"const": "Blue"}, "label": {"const": "Calme"}}}]},
+    "mood_dark_blue": {"allOf": [{"$ref": "#/$defs/mood_base"}, {"properties": {"color": {"const": "Dark Blue"}, "label": {"const": "Myst\u00e8re"}}}]},
+    "mood_purple": {"allOf": [{"$ref": "#/$defs/mood_base"}, {"properties": {"color": {"const": "Purple"}, "label": {"const": "Triste"}}}]},
+    "my_tags": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["genres", "year_origin", "situations"],
+      "properties": {
+        "genres": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+        "year_origin": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+        "situations": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
+      }
+    }
+  }
+}

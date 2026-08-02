@@ -1,0 +1,49 @@
+{
+  "schema_version": "2.0",
+  "categories": {
+    "status": "Status",
+    "genres": "Genre",
+    "year_origin": "Ann\u00e9e",
+    "situations": "Situation"
+  },
+  "statuses": ["To Do", "Mood", "Energy", "Tags", "Hot Cues"],
+  "moods": [
+    {"color": "Pink", "label": "Sexy", "color_id": "1"},
+    {"color": "Red", "label": "\u00c9nergie", "color_id": "2"},
+    {"color": "Orange", "label": "Sombre", "color_id": "3"},
+    {"color": "Yellow", "label": "Joie", "color_id": "4"},
+    {"color": "Green", "label": "Ambiant", "color_id": "5"},
+    {"color": "Blue", "label": "Calme", "color_id": "6"},
+    {"color": "Dark Blue", "label": "Myst\u00e8re", "color_id": "7"},
+    {"color": "Purple", "label": "Triste", "color_id": "8"}
+  ],
+  "genres": [
+    "Afro House",
+    "Organic House",
+    "House",
+    "Electro House",
+    "Melodic House",
+    "Melodic Techno",
+    "Techno",
+    "Hardgroove",
+    "Rap",
+    "Pop",
+    "Open Format",
+    "Remix",
+    "Edit",
+    "Mashup"
+  ],
+  "year_origin_patterns": [
+    "^(?:19|20)\\d{2}$",
+    "^(?:\\d{2}|20\\d0)(?:FR|US)$"
+  ],
+  "situations": [
+    "Main Floor",
+    "Second Floor",
+    "Lounge",
+    "Midnight",
+    "Morning",
+    "Build-up",
+    "Peak Time"
+  ]
+}

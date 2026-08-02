@@ -1,5 +1,7 @@
 ﻿using CueGen.Analysis;
 using Mono.Options;
+using CueGen.Workflow;
+using Newtonsoft.Json;
 using NLog;
 using NLog.Config;
 using NLog.Targets;
@@ -19,6 +21,8 @@ namespace CueGen.Console
         readonly Config Config = new();
         bool Backup = true;
         bool ReportProgress = true;
+        string ImportPath;
+        string TaxonomyPath;
 
         static int Main(string[] args)
         {
@@ -56,6 +60,8 @@ namespace CueGen.Console
                     {
                         { "h|help", "Show this message and exit", v => showHelp = v != null },
                         { "dryrun", "Do not alter Rekordbox database, only perform a test run", v => program.Config.DryRun = v != null },
+                        { "import=", "Import one RekordBot workflow 2.0 metadata document", v => program.ImportPath = v },
+                        { "taxonomy=", "Workflow 2.0 taxonomy JSON (default is embedded)", v => program.TaxonomyPath = v },
                         { "hc|hotcues", "Create hot cue points instead of memory cue points", v => program.Config.HotCues = v != null },
                         { "m|merge", "Merge with existing cue points (default is enabled)", v => program.Config.Merge = v != null },
                         { "d|distance=", "Minimum distance in bars to existing cue points (default is 4)", (int v) => program.Config.MinDistanceBars = v },
@@ -262,6 +268,16 @@ namespace CueGen.Console
             else
             {
                 Log.Info("Dry run: database backup skipped because no mutation is allowed");
+            }
+
+            if (!string.IsNullOrWhiteSpace(ImportPath))
+            {
+                var taxonomy = string.IsNullOrWhiteSpace(TaxonomyPath)
+                    ? WorkflowTaxonomy.LoadDefault()
+                    : WorkflowTaxonomy.Load(TaxonomyPath);
+                var result = new WorkflowImportService(Config, taxonomy).ImportFile(ImportPath);
+                System.Console.Out.WriteLine(JsonConvert.SerializeObject(result, Formatting.Indented));
+                return result.Success;
             }
 
             var generator = new Generator(Config);
