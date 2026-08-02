@@ -1,4 +1,4 @@
-﻿using CueGen.Analysis;
+using CueGen.Analysis;
 using System;
 using System.Collections.Generic;
 using System.Text;
@@ -222,11 +222,11 @@ namespace CueGen
         /// <summary>
         /// Gets or sets the Soundcharts App ID.
         /// </summary>
-        public string SoundchartsAppId { get; set; } = "LLAST-NAME-API4_81E7B587";
+        public string SoundchartsAppId { get; set; }
         /// <summary>
         /// Gets or sets the Soundcharts API Key.
         /// </summary>
-        public string SoundchartsApiKey { get; set; } = "4c6c33f5aa9b009c";
+        public string SoundchartsApiKey { get; set; }
         /// <summary>
         /// When enabled, fetches and updates track metadata from Soundcharts.
         /// </summary>
@@ -259,11 +259,11 @@ namespace CueGen
         /// <summary>
         /// Gets or sets the Beatport username.
         /// </summary>
-        public string BeatportUsername { get; set; } = "loe_lg";
+        public string BeatportUsername { get; set; }
 
         /// <summary>
         /// Gets or sets the Beatport password.
         /// </summary>
-        public string BeatportPassword { get; set; } = "ErHn$9ZNYqNC9Boh";
+        public string BeatportPassword { get; set; }
     }
 }

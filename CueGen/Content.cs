@@ -1,5 +1,6 @@
 ﻿using BinarySerialization;
 using CueGen.Analysis;
+using Newtonsoft.Json;
 using NLog;
 using SQLite;
 using System;
@@ -101,6 +102,7 @@ namespace CueGen
         public List<Cue> Cues { get; private set; } = new();
         [SQLite.Ignore]
         
+        [JsonIgnore]
         public Artist Artist { get; set; } = new();
         [SQLite.Ignore]
         public List<SongMyTag> MyTags { get; private set; } = new();

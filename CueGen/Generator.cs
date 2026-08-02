@@ -72,7 +72,7 @@ namespace CueGen
 
             Log.Info("{count} contents read", contents.Count);
 
-            var artists = GetArtists();
+            var artists = Config.UpdateFromBeatport ? GetArtists() : new List<Artist>();
             var cues = GetCues();
             var contentCues = GetContentCues();
             var songMyTags = GetSongMyTags();
@@ -362,18 +362,21 @@ namespace CueGen
                 contents = contents.Where(c => glob.IsMatch(c.FolderPath)).ToList();
             }
 
-            SoundchartsClient soundchartsClient = null;
-            if (Config.UpdateFromSoundcharts && !string.IsNullOrWhiteSpace(Config.SoundchartsAppId) && !string.IsNullOrWhiteSpace(Config.SoundchartsApiKey))
+            if (Config.UpdateFromSoundcharts)
             {
-                soundchartsClient = new SoundchartsClient(Config.SoundchartsAppId, Config.SoundchartsApiKey);
+                Log.Warn("Soundcharts metadata updates are not connected to the generation flow and were skipped");
             }
 
-            BeatportClient beatportClient;
-            
-            if (Config.UpdateFromBeatport ||true)
+            if (Config.UpdateFromBeatport &&
+                (string.IsNullOrWhiteSpace(Config.BeatportUsername) || string.IsNullOrWhiteSpace(Config.BeatportPassword)))
             {
-                beatportClient = new BeatportClient("loe_lg", "ErHn$9ZNYqNC9Boh");
+                Log.Error("Beatport credentials are required when Beatport metadata is enabled");
+                return true;
             }
+
+            using var beatportClient = Config.UpdateFromBeatport
+                ? new BeatportClient(Config.BeatportUsername, Config.BeatportPassword)
+                : null;
 
             var count = 0;
 

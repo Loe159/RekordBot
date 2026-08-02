@@ -363,3 +363,11 @@ FodyWeavers.xsd
 launchSettings.json
 .vscode/tasks.json
 .vscode/launch.json
+
+# Local credentials
+.env
+.env.*
+!.env.example
+
+# Dated safety backups created before file replacement
+*.bak.[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]
