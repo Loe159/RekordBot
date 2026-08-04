@@ -213,6 +213,28 @@ namespace CueGen.Workflow
                 .ToList();
         }
 
+        public IList<WorkflowMemoryCueState> GetWorkflowMemoryCueStates(string contentId)
+        {
+            return cues
+                .Where(cue => cue.ContentID == contentId && cue.Kind == 0)
+                .Where(cue => IsManagedCue(cue) ||
+                    string.Equals(cue.Comment, WorkflowMemoryCueRuleEngine.ManualVocalName, StringComparison.Ordinal))
+                .Select(ToMemoryCueState)
+                .OrderBy(cue => cue.PositionMs)
+                .ThenBy(cue => cue.Name, StringComparer.Ordinal)
+                .ToList();
+        }
+
+        public IList<WorkflowMemoryCueState> GetAllMemoryCueStates(string contentId)
+        {
+            return cues
+                .Where(cue => cue.ContentID == contentId && cue.Kind == 0)
+                .Select(ToMemoryCueState)
+                .OrderBy(cue => cue.PositionMs)
+                .ThenBy(cue => cue.Name, StringComparer.Ordinal)
+                .ToList();
+        }
+
         public void ValidateHotCuePreflight(Content content, IList<WorkflowHotCue> desiredCues)
         {
             if (desiredCues == null)
@@ -287,6 +309,111 @@ namespace CueGen.Workflow
                 cues.Add(cue);
                 changed = true;
             }
+
+            if (changed || !IsContentCueConsistent(content.ID))
+            {
+                SyncContentCue(content);
+                changed = true;
+            }
+            return changed;
+        }
+
+        public void ValidateMemoryCuePreflight(
+            Content content,
+            IList<WorkflowMemoryCue> desiredCues)
+        {
+            if (desiredCues == null)
+                return;
+
+            var existingVocal = cues.Count(cue =>
+                cue.ContentID == content.ID &&
+                cue.Kind == 0 &&
+                string.Equals(cue.Comment, WorkflowMemoryCueRuleEngine.ManualVocalName, StringComparison.Ordinal));
+            if (existingVocal > 1)
+            {
+                throw new InvalidOperationException(
+                    $"Multiple Memory Cues named '{WorkflowMemoryCueRuleEngine.ManualVocalName}' exist");
+            }
+
+            var unmanagedCount = cues.Count(cue =>
+                cue.ContentID == content.ID && cue.Kind == 0 && !IsManagedCue(cue));
+            var unmanagedVocal = cues.Any(cue =>
+                cue.ContentID == content.ID &&
+                cue.Kind == 0 &&
+                !IsManagedCue(cue) &&
+                string.Equals(cue.Comment, WorkflowMemoryCueRuleEngine.ManualVocalName, StringComparison.Ordinal));
+            var finalCount = unmanagedCount + desiredCues.Count - (unmanagedVocal ? 1 : 0);
+            if (finalCount > WorkflowMemoryCueRuleEngine.MaximumMemoryCues)
+            {
+                throw new InvalidOperationException(
+                    $"The generated result would exceed {WorkflowMemoryCueRuleEngine.MaximumMemoryCues} Memory Cues");
+            }
+
+            foreach (var desired in desiredCues)
+            {
+                if (desired.PositionMs < 0 ||
+                    content.Length.HasValue && desired.PositionMs > content.Length.Value * 1000)
+                {
+                    throw new InvalidOperationException($"Memory Cue '{desired.Name}' is outside the track duration");
+                }
+                if (desired.LoopEndMs.HasValue &&
+                    content.Length.HasValue &&
+                    desired.LoopEndMs.Value > content.Length.Value * 1000)
+                {
+                    throw new InvalidOperationException($"Memory Cue '{desired.Name}' loop extends beyond the track duration");
+                }
+                if (desired.LoopBeats.HasValue && !desired.LoopEndMs.HasValue)
+                    throw new InvalidOperationException($"Memory Cue '{desired.Name}' loop has no end position");
+            }
+        }
+
+        public bool SyncMemoryCues(Content content, IList<WorkflowMemoryCue> desiredCues)
+        {
+            if (desiredCues == null)
+                return false;
+
+            ValidateMemoryCuePreflight(content, desiredCues);
+            var changed = false;
+            var desiredVocal = desiredCues.Single(cue =>
+                string.Equals(cue.Name, WorkflowMemoryCueRuleEngine.ManualVocalName, StringComparison.Ordinal));
+            var existingVocal = cues.SingleOrDefault(cue =>
+                cue.ContentID == content.ID &&
+                cue.Kind == 0 &&
+                string.Equals(cue.Comment, WorkflowMemoryCueRuleEngine.ManualVocalName, StringComparison.Ordinal));
+            if (existingVocal == null)
+            {
+                var vocal = CreateMemoryCue(content, desiredVocal);
+                database.Insert(vocal);
+                cues.Add(vocal);
+                existingVocal = vocal;
+                changed = true;
+            }
+
+            var availableManaged = cues
+                .Where(cue => cue.ContentID == content.ID && cue.Kind == 0 && IsManagedCue(cue))
+                .Where(cue => cue != existingVocal)
+                .OrderBy(cue => ParseCueId(cue.ID))
+                .ToList();
+            foreach (var desired in desiredCues
+                .Where(cue => !string.Equals(cue.Name, WorkflowMemoryCueRuleEngine.ManualVocalName, StringComparison.Ordinal))
+                .OrderBy(cue => cue.PositionMs)
+                .ThenBy(cue => cue.Name, StringComparer.Ordinal))
+            {
+                var matching = availableManaged.FirstOrDefault(cue => MemoryCueMatches(cue, desired));
+                if (matching != null)
+                {
+                    availableManaged.Remove(matching);
+                    continue;
+                }
+
+                var created = CreateMemoryCue(content, desired);
+                database.Insert(created);
+                cues.Add(created);
+                changed = true;
+            }
+
+            foreach (var obsolete in availableManaged)
+                changed |= DeleteCue(obsolete);
 
             if (changed || !IsContentCueConsistent(content.ID))
             {
@@ -487,13 +614,14 @@ namespace CueGen.Workflow
                 return existing;
             }
 
-            if (nextPlaylistId >= 0x0fffffff)
+            if (nextPlaylistId == long.MaxValue)
                 throw new InvalidOperationException("No Rekordbox playlist ID is available");
 
+            nextPlaylistId++;
             var now = DateTime.UtcNow;
             var playlist = new Playlist
             {
-                ID = (++nextPlaylistId).ToString(CultureInfo.InvariantCulture),
+                ID = nextPlaylistId.ToString(CultureInfo.InvariantCulture),
                 Seq = playlists
                     .Where(item => item.ParentID == parentId)
                     .Select(item => item.Seq ?? 0)
@@ -586,6 +714,84 @@ namespace CueGen.Workflow
             return matches.SingleOrDefault();
         }
 
+        private static WorkflowMemoryCueState ToMemoryCueState(Cue cue)
+        {
+            return new WorkflowMemoryCueState
+            {
+                Name = cue.Comment,
+                PositionMs = cue.InMsec ?? 0,
+                LoopBeats = GetLoopBeats(cue),
+                LoopEndMs = cue.OutMsec.HasValue && cue.OutMsec.Value >= 0 ? cue.OutMsec : null,
+                Managed = IsManagedCue(cue)
+            };
+        }
+
+        private Cue CreateMemoryCue(Content content, WorkflowMemoryCue desired)
+        {
+            var id = ++nextCueId;
+            var now = DateTime.UtcNow;
+            var cue = new Cue
+            {
+                ID = id.ToString(CultureInfo.InvariantCulture),
+                ContentID = content.ID,
+                InMsec = desired.PositionMs,
+                InFrame = Generator.TimeToFrame(desired.PositionMs),
+                Kind = 0,
+                Color = -1,
+                Comment = desired.Name,
+                ContentUUID = content.UUID,
+                UUID = Generator.CreateManagedCueUuid(id),
+                rb_local_usn = ++nextCueUsn,
+                created_at = now,
+                updated_at = now
+            };
+            SetMemoryLoop(cue, desired);
+            return cue;
+        }
+
+        private static bool MemoryCueMatches(Cue cue, WorkflowMemoryCue desired)
+        {
+            var expectedOut = desired.LoopBeats.HasValue ? desired.LoopEndMs : -1;
+            var expectedOutFrame = desired.LoopBeats.HasValue
+                ? Generator.TimeToFrame(desired.LoopEndMs.Value)
+                : 0;
+            var expectedLoopSize = desired.LoopBeats.HasValue
+                ? 0x10000 * desired.LoopBeats.Value + 1
+                : (int?)null;
+            var expectedActiveLoop = desired.LoopBeats.HasValue ? 1 : (int?)null;
+            var expectedColor = desired.LoopBeats.HasValue ? 255 : -1;
+            return cue.InMsec == desired.PositionMs &&
+                cue.InFrame == Generator.TimeToFrame(desired.PositionMs) &&
+                cue.OutMsec == expectedOut &&
+                cue.OutFrame == expectedOutFrame &&
+                cue.Kind == 0 &&
+                cue.Color == expectedColor &&
+                cue.ActiveLoop == expectedActiveLoop &&
+                cue.BeatLoopSize == expectedLoopSize &&
+                cue.Comment == desired.Name;
+        }
+
+        private static void SetMemoryLoop(Cue cue, WorkflowMemoryCue desired)
+        {
+            cue.OutMsec = -1;
+            cue.OutFrame = 0;
+            cue.ActiveLoop = null;
+            cue.BeatLoopSize = null;
+            cue.CueMicrosec = null;
+            cue.Color = -1;
+            if (!desired.LoopBeats.HasValue)
+                return;
+            if (!desired.LoopEndMs.HasValue)
+                throw new InvalidOperationException($"Memory Cue '{desired.Name}' loop has no end position");
+
+            cue.OutMsec = desired.LoopEndMs.Value;
+            cue.OutFrame = Generator.TimeToFrame(desired.LoopEndMs.Value);
+            cue.ActiveLoop = 1;
+            cue.BeatLoopSize = 0x10000 * desired.LoopBeats.Value + 1;
+            cue.CueMicrosec = 0;
+            cue.Color = 255;
+        }
+
         private Cue CreateCue(
             Content content,
             WorkflowHotCue desired,
@@ -602,7 +808,7 @@ namespace CueGen.Workflow
                 Kind = SlotToKind(desired.Slot),
                 Color = -1,
                 ColorTableIndex = mapping.ColorTableIndex,
-                Comment = mapping.Name,
+                Comment = desired.Name,
                 ContentUUID = content.UUID,
                 UUID = Generator.CreateManagedCueUuid(id),
                 rb_local_usn = ++nextCueUsn,
@@ -633,7 +839,7 @@ namespace CueGen.Workflow
                 cue.ColorTableIndex == mapping.ColorTableIndex &&
                 cue.ActiveLoop == expectedActiveLoop &&
                 cue.BeatLoopSize == expectedLoopSize &&
-                cue.Comment == mapping.Name &&
+                cue.Comment == desired.Name &&
                 cue.ContentUUID == content.UUID)
             {
                 return false;
@@ -643,7 +849,7 @@ namespace CueGen.Workflow
             cue.InFrame = Generator.TimeToFrame(desired.PositionMs.Value);
             cue.Kind = SlotToKind(desired.Slot);
             cue.ColorTableIndex = mapping.ColorTableIndex;
-            cue.Comment = mapping.Name;
+            cue.Comment = desired.Name;
             cue.ContentUUID = content.UUID;
             SetLoop(cue, content, desired);
             cue.rb_local_usn = ++nextCueUsn;
@@ -674,10 +880,11 @@ namespace CueGen.Workflow
 
         private static int GetLoopEnd(Content content, WorkflowHotCue desired)
         {
-            if (!content.BPM.HasValue || content.BPM.Value <= 0)
+            if (!desired.LoopEndMs.HasValue && (!content.BPM.HasValue || content.BPM.Value <= 0))
                 throw new InvalidOperationException($"Hot Cue {desired.Slot} loop requires a valid track BPM");
 
-            var outMsec = desired.PositionMs.Value + Generator.BeatsToMs(desired.LoopBeats.Value, content.BPM.Value);
+            var outMsec = desired.LoopEndMs ??
+                desired.PositionMs.Value + Generator.BeatsToMs(desired.LoopBeats.Value, content.BPM.Value);
             if (content.Length.HasValue && outMsec > content.Length.Value * 1000)
                 throw new InvalidOperationException($"Hot Cue {desired.Slot} loop extends beyond the track duration");
             return outMsec;

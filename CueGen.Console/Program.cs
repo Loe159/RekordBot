@@ -56,11 +56,17 @@ namespace CueGen.Console
 
                 try
                 {
+                    var workflowEnvironment = WorkflowEnvironmentConfiguration.Load(
+                        Environment.GetEnvironmentVariable);
+                    workflowEnvironment.Apply(program.Config);
+                    program.TaxonomyPath = workflowEnvironment.TaxonomyPath;
+
                     var options = new OptionSet
                     {
                         { "h|help", "Show this message and exit", v => showHelp = v != null },
                         { "dryrun", "Do not alter Rekordbox database, only perform a test run", v => program.Config.DryRun = v != null },
                         { "import=", "Import one RekordBot workflow 2.0 metadata document", v => program.ImportPath = v },
+                        { "workflow-hotcues|generate-workflow-hotcues", "Generate deterministic workflow Hot Cues and Memory Cues for tracks selected by --glob", v => program.Config.GenerateWorkflowHotCues = v != null },
                         { "taxonomy=", "Workflow 2.0 taxonomy JSON (default is embedded)", v => program.TaxonomyPath = v },
                         { "hc|hotcues", "Create hot cue points instead of memory cue points", v => program.Config.HotCues = v != null },
                         { "m|merge", "Merge with existing cue points (default is enabled)", v => program.Config.Merge = v != null },
@@ -248,6 +254,17 @@ namespace CueGen.Console
 
             Config.DatabasePath = RekordboxSafety.ValidateDatabase(Config.DatabasePath);
 
+            if (Config.GenerateWorkflowHotCues && !string.IsNullOrWhiteSpace(ImportPath))
+            {
+                Log.Error("--workflow-hotcues and --import cannot be used together");
+                return false;
+            }
+            if (Config.GenerateWorkflowHotCues && string.IsNullOrWhiteSpace(Config.FileGlob))
+            {
+                Log.Error("--workflow-hotcues requires an explicit --glob selection");
+                return false;
+            }
+
             if (!Config.DryRun)
             {
                 if (RekordboxSafety.IsRekordboxRunning())
@@ -276,6 +293,16 @@ namespace CueGen.Console
                     ? WorkflowTaxonomy.LoadDefault()
                     : WorkflowTaxonomy.Load(TaxonomyPath);
                 var result = new WorkflowImportService(Config, taxonomy).ImportFile(ImportPath);
+                System.Console.Out.WriteLine(JsonConvert.SerializeObject(result, Formatting.Indented));
+                return result.Success;
+            }
+
+            if (Config.GenerateWorkflowHotCues)
+            {
+                var taxonomy = string.IsNullOrWhiteSpace(TaxonomyPath)
+                    ? WorkflowTaxonomy.LoadDefault()
+                    : WorkflowTaxonomy.Load(TaxonomyPath);
+                var result = new WorkflowHotCueGenerationService(Config, taxonomy).Generate();
                 System.Console.Out.WriteLine(JsonConvert.SerializeObject(result, Formatting.Indented));
                 return result.Success;
             }

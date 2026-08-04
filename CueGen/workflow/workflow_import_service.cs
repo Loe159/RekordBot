@@ -9,6 +9,10 @@ namespace CueGen.Workflow
 {
     public sealed class WorkflowImportService
     {
+        public const string ReviewStatus = "\u00c0 v\u00e9rifier";
+        private const string StatusChangeField = "status";
+        private const string DesiredPlaylistsChangeField = "desired_playlists";
+
         private readonly Config config;
         private readonly WorkflowTaxonomy taxonomy;
         private readonly WorkflowImportValidator validator;
@@ -68,10 +72,11 @@ namespace CueGen.Workflow
                 repository.ValidateHotCuePreflight(content, document.HotCues);
                 repository.ValidatePlaylistPreflight(document.DesiredPlaylists);
                 var changes = BuildChanges(repository, content, document);
+                var reviewDisposition = FinalizeChangesForReview(repository, content.ID, changes);
 
                 if (!config.DryRun && changes.Count > 0)
                 {
-                    database.RunInTransaction(() => Apply(repository, content, document));
+                    database.RunInTransaction(() => Apply(repository, content, document, reviewDisposition));
                 }
 
                 return new WorkflowImportResult
@@ -88,7 +93,7 @@ namespace CueGen.Workflow
             }
         }
 
-        private IList<WorkflowImportChange> BuildChanges(
+        internal IList<WorkflowImportChange> BuildChanges(
             RekordboxWorkflowRepository repository,
             Content content,
             WorkflowImportDocument document)
@@ -107,7 +112,7 @@ namespace CueGen.Workflow
                 changes,
                 repository,
                 content.ID,
-                "status",
+                StatusChangeField,
                 taxonomy.Categories.Status,
                 DesiredStatus(document.Status));
 
@@ -124,14 +129,20 @@ namespace CueGen.Workflow
             return changes;
         }
 
-        private void Apply(
+        internal void Apply(
             RekordboxWorkflowRepository repository,
             Content content,
-            WorkflowImportDocument document)
+            WorkflowImportDocument document,
+            WorkflowReviewDisposition reviewDisposition)
         {
             var colorId = document.Mood == null ? null : GetMood(document.Mood).ColorId;
             repository.UpdateMetadata(content, colorId, document.Energy);
-            repository.SyncCategory(content.ID, taxonomy.Categories.Status, DesiredStatus(document.Status));
+            repository.SyncCategory(
+                content.ID,
+                taxonomy.Categories.Status,
+                reviewDisposition == WorkflowReviewDisposition.NotRequired
+                    ? DesiredStatus(document.Status)
+                    : DesiredStatus(ReviewStatus));
 
             if (document.MyTags != null)
             {
@@ -142,6 +153,77 @@ namespace CueGen.Workflow
 
             repository.SyncHotCues(content, document.HotCues, taxonomy);
             repository.SyncPlaylists(content.ID, document.DesiredPlaylists);
+        }
+
+        internal WorkflowReviewDisposition FinalizeChangesForReview(
+            RekordboxWorkflowRepository repository,
+            string contentId,
+            IList<WorkflowImportChange> changes)
+        {
+            var currentStatus = repository.GetAssignedTagNames(contentId, taxonomy.Categories.Status);
+            var reviewStatus = DesiredStatus(ReviewStatus).ToList();
+            var alreadyMarkedForReview = currentStatus.SequenceEqual(reviewStatus, StringComparer.Ordinal);
+            var requestedStatusChange = changes.FirstOrDefault(change => change.Field == StatusChangeField);
+
+            // The review marker is intentionally sticky. Re-running the same operation must
+            // not replace it with the workflow status carried by the original request.
+            if (alreadyMarkedForReview && requestedStatusChange != null)
+            {
+                changes.Remove(requestedStatusChange);
+                requestedStatusChange = null;
+            }
+
+            var hasReviewableChange = changes.Any(change =>
+                change.Field != StatusChangeField &&
+                !(requestedStatusChange != null && IsPreparationPlaylistTransition(change)));
+            if (!hasReviewableChange)
+            {
+                return alreadyMarkedForReview
+                    ? WorkflowReviewDisposition.AlreadyPending
+                    : WorkflowReviewDisposition.NotRequired;
+            }
+
+            if (requestedStatusChange != null)
+                changes.Remove(requestedStatusChange);
+
+            if (!currentStatus.SequenceEqual(reviewStatus, StringComparer.Ordinal))
+            {
+                changes.Add(new WorkflowImportChange
+                {
+                    Field = StatusChangeField,
+                    Before = currentStatus,
+                    After = reviewStatus
+                });
+            }
+
+            return alreadyMarkedForReview
+                ? WorkflowReviewDisposition.AlreadyPending
+                : WorkflowReviewDisposition.MarkPending;
+        }
+
+        private static bool IsPreparationPlaylistTransition(WorkflowImportChange change)
+        {
+            if (change.Field != DesiredPlaylistsChangeField ||
+                change.Before is not IEnumerable<string> before ||
+                change.After is not IEnumerable<string> after)
+            {
+                return false;
+            }
+
+            var preparationPrefix = WorkflowPlaylistPlan.PreparationFolder + "/";
+            var beforePaths = before.OrderBy(path => path, StringComparer.Ordinal).ToList();
+            var afterPaths = after.OrderBy(path => path, StringComparer.Ordinal).ToList();
+            if (beforePaths.Count(path => path.StartsWith(preparationPrefix, StringComparison.Ordinal)) != 1 ||
+                afterPaths.Count(path => path.StartsWith(preparationPrefix, StringComparison.Ordinal)) != 1)
+            {
+                return false;
+            }
+
+            return beforePaths
+                .Where(path => !path.StartsWith(preparationPrefix, StringComparison.Ordinal))
+                .SequenceEqual(
+                    afterPaths.Where(path => !path.StartsWith(preparationPrefix, StringComparison.Ordinal)),
+                    StringComparer.Ordinal);
         }
 
         private WorkflowMoodMapping GetMood(WorkflowMood mood)
@@ -195,7 +277,7 @@ namespace CueGen.Workflow
                     return new WorkflowHotCueState
                     {
                         Slot = cue.Slot,
-                        Name = mapping.Name,
+                        Name = cue.Name,
                         Color = mapping.Color,
                         ColorTableIndex = mapping.ColorTableIndex,
                         PositionMs = cue.PositionMs.Value,
@@ -235,7 +317,7 @@ namespace CueGen.Workflow
             {
                 changes.Add(new WorkflowImportChange
                 {
-                    Field = "desired_playlists",
+                    Field = DesiredPlaylistsChangeField,
                     Before = before,
                     After = after
                 });
@@ -261,5 +343,12 @@ namespace CueGen.Workflow
                 Errors = errors.ToList()
             };
         }
+    }
+
+    internal enum WorkflowReviewDisposition
+    {
+        NotRequired,
+        AlreadyPending,
+        MarkPending
     }
 }

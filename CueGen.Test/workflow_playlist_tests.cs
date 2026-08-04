@@ -52,6 +52,40 @@ namespace CueGen.Test
         }
 
         [Test]
+        public void LargeExistingPlaylistIdsRemainAllocatable()
+        {
+            const long existingId = 3000000000L;
+            using (var database = OpenDatabase())
+            {
+                var now = DateTime.UtcNow;
+                database.Insert(new Playlist
+                {
+                    ID = existingId.ToString(),
+                    Name = "Existing high-ID playlist",
+                    Attribute = 0,
+                    ParentID = "root",
+                    Seq = 1,
+                    UUID = Guid.NewGuid().ToString(),
+                    created_at = now,
+                    updated_at = now
+                });
+            }
+
+            var document = CreateProgressDocument("Hot Cues");
+            var result = CreateService().ImportJson(JsonConvert.SerializeObject(document));
+
+            Assert.That(result.Success, Is.True, string.Join(Environment.NewLine, result.Errors));
+            using var verification = OpenDatabase();
+            var managedIds = verification.Table<Playlist>()
+                .ToList()
+                .Where(playlist => playlist.UUID != null && playlist.UUID.StartsWith("51facbf8-0bb1-4f78-", StringComparison.Ordinal))
+                .Select(playlist => long.Parse(playlist.ID))
+                .ToList();
+            Assert.That(managedIds, Is.Not.Empty);
+            Assert.That(managedIds, Has.All.GreaterThan(existingId));
+        }
+
+        [Test]
         public void EveryStatusTransitionKeepsOnePreparationAndOverlappingClassifications()
         {
             var statuses = new string[] { "To Do", "Mood", "Energy", "Tags", "Hot Cues", null };
@@ -94,6 +128,33 @@ namespace CueGen.Test
                 Assert.That(database.Table<Playlist>().Count(), Is.EqualTo(playlistCount));
                 Assert.That(database.Table<SongPlaylist>().Count(), Is.EqualTo(relationCount));
             }
+        }
+
+        [Test]
+        public void StatusOnlyTransitionDoesNotRequireReview()
+        {
+            var taxonomy = WorkflowTaxonomy.LoadDefault();
+            var before = CreateProgressDocument("To Do");
+            using (var database = OpenDatabase())
+            {
+                var repository = new RekordboxWorkflowRepository(database);
+                database.RunInTransaction(() =>
+                {
+                    repository.SyncCategory(TargetContentId, taxonomy.Categories.Status, new[] { "To Do" });
+                    repository.SyncPlaylists(TargetContentId, before.DesiredPlaylists);
+                });
+            }
+
+            var after = CreateProgressDocument("Mood");
+            var result = CreateService().ImportJson(JsonConvert.SerializeObject(after));
+
+            Assert.That(result.Success, Is.True, string.Join(Environment.NewLine, result.Errors));
+            Assert.That(result.Changes.Select(change => change.Field),
+                Is.EquivalentTo(new[] { "status", "desired_playlists" }));
+            using var verification = OpenDatabase();
+            Assert.That(GetAssignedStatus(verification), Is.EqualTo(new[] { "Mood" }));
+            Assert.That(new RekordboxWorkflowRepository(verification).GetManagedPlaylistPaths(TargetContentId),
+                Is.EquivalentTo(after.DesiredPlaylists));
         }
 
         [Test]
@@ -201,7 +262,8 @@ namespace CueGen.Test
                 var paths = new RekordboxWorkflowRepository(database).GetManagedPlaylistPaths(TargetContentId);
                 Assert.That(paths, Does.Contain("Preparation/Hot Cues"));
                 Assert.That(paths, Does.Not.Contain("Preparation/READY"));
-                Assert.That(GetAssignedStatus(database), Is.EqualTo(new[] { "Hot Cues" }));
+                Assert.That(GetAssignedStatus(database),
+                    Is.EqualTo(new[] { WorkflowImportService.ReviewStatus }));
             }
         }
 
@@ -293,9 +355,12 @@ namespace CueGen.Test
         {
             return new List<WorkflowHotCue>
             {
-                new() { Slot = "A", Name = "IN-32", Color = "Green", PositionMs = 0, PhraseStartVerified = true },
-                new() { Slot = "C", Name = "DROP 1", Color = "Red", PositionMs = 1000, PhraseStartVerified = true },
-                new() { Slot = "E", Name = "OUT-32", Color = "Orange", PositionMs = 2000, PhraseStartVerified = true }
+                new() { Slot = "A", Name = "INTRO", Color = "Yellow", PositionMs = 0, PhraseStartVerified = true },
+                new() { Slot = "B", Name = "VOCAL", Color = "Pink", PositionMs = 1000, PhraseStartVerified = false, VocalSectionVerified = true },
+                new() { Slot = "C", Name = "DROP -32", Color = "Green", PositionMs = 2000, PhraseStartVerified = false, DropOffsetBeats = 32 },
+                new() { Slot = "D", Name = "DROP 1", Color = "Red", PositionMs = 3000, PhraseStartVerified = true },
+                new() { Slot = "E", Name = "BREAKDOWN", Color = "Purple", PositionMs = 4000, PhraseStartVerified = true },
+                new() { Slot = "H", Name = "LOOP", Color = "Orange", PositionMs = 5000, PhraseStartVerified = true, LoopBeats = 16 }
             };
         }
 

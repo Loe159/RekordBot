@@ -84,6 +84,13 @@ namespace CueGen
         /// </value>
         public string FileGlob { get; set; }
         /// <summary>
+        /// Gets or sets a value indicating whether to generate workflow Hot Cues from Rekordbox analysis.
+        /// </summary>
+        /// <value>
+        ///   <c>true</c> to generate deterministic workflow Hot Cues; otherwise, <c>false</c>.
+        /// </value>
+        public bool GenerateWorkflowHotCues { get; set; }
+        /// <summary>
         /// Gets or sets a value indicating whether to remove all generated cue points.
         /// </summary>
         /// <value>

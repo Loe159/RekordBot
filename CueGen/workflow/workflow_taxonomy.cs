@@ -98,6 +98,9 @@ namespace CueGen.Workflow
         [JsonProperty("name", Required = Newtonsoft.Json.Required.Always)]
         public string Name { get; set; }
 
+        [JsonProperty("alternate_names")]
+        public IList<string> AlternateNames { get; set; } = new List<string>();
+
         [JsonProperty("color", Required = Newtonsoft.Json.Required.Always)]
         public string Color { get; set; }
 
@@ -106,5 +109,11 @@ namespace CueGen.Workflow
 
         [JsonProperty("required", Required = Newtonsoft.Json.Required.Always)]
         public bool Required { get; set; }
+
+        public bool AcceptsName(string name)
+        {
+            return string.Equals(Name, name, StringComparison.Ordinal) ||
+                (AlternateNames ?? Array.Empty<string>()).Contains(name, StringComparer.Ordinal);
+        }
     }
 }

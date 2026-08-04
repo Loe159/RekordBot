@@ -89,8 +89,33 @@ namespace CueGen.Workflow
         [JsonProperty("phrase_start_verified", Required = Required.Always)]
         public bool? PhraseStartVerified { get; set; }
 
+        [JsonProperty("vocal_section_verified")]
+        public bool? VocalSectionVerified { get; set; }
+
+        [JsonProperty("drop_offset_beats")]
+        public int? DropOffsetBeats { get; set; }
+
         [JsonProperty("loop_beats")]
         public int? LoopBeats { get; set; }
+
+        [JsonIgnore]
+        public int? LoopEndMs { get; set; }
+    }
+
+    public sealed class WorkflowHotCueEvidence
+    {
+        public string Slot { get; set; }
+        public int BeatIndex { get; set; }
+        public int? PhraseNumber { get; set; }
+        public string Rule { get; set; }
+    }
+
+    public sealed class WorkflowHotCueProposal
+    {
+        public IList<WorkflowHotCue> HotCues { get; set; } = new List<WorkflowHotCue>();
+        public IList<WorkflowHotCueEvidence> Evidence { get; set; } = new List<WorkflowHotCueEvidence>();
+        public IList<string> Warnings { get; set; } = new List<string>();
+        public bool Complete { get; set; }
     }
 
     public sealed class WorkflowHotCueState
@@ -101,6 +126,31 @@ namespace CueGen.Workflow
         public int? ColorTableIndex { get; set; }
         public int PositionMs { get; set; }
         public int? LoopBeats { get; set; }
+    }
+
+    public sealed class WorkflowMemoryCue
+    {
+        public string Name { get; set; }
+        public int PositionMs { get; set; }
+        public int BeatIndex { get; set; }
+        public int? DistanceBeats { get; set; }
+        public int? LoopBeats { get; set; }
+        public int? LoopEndMs { get; set; }
+    }
+
+    public sealed class WorkflowMemoryCueState
+    {
+        public string Name { get; set; }
+        public int PositionMs { get; set; }
+        public int? LoopBeats { get; set; }
+        public int? LoopEndMs { get; set; }
+        public bool Managed { get; set; }
+    }
+
+    public sealed class WorkflowMemoryCueProposal
+    {
+        public IList<WorkflowMemoryCue> MemoryCues { get; set; } = new List<WorkflowMemoryCue>();
+        public IList<string> Warnings { get; set; } = new List<string>();
     }
 
     public sealed class WorkflowImportChange
@@ -116,6 +166,30 @@ namespace CueGen.Workflow
         public bool DryRun { get; set; }
         public string ContentId { get; set; }
         public IList<WorkflowImportChange> Changes { get; set; } = new List<WorkflowImportChange>();
+        public IList<string> Errors { get; set; } = new List<string>();
+    }
+
+    public sealed class WorkflowHotCueTrackResult
+    {
+        public bool Success { get; set; }
+        public string ContentId { get; set; }
+        public string Path { get; set; }
+        public string Status { get; set; }
+        public bool Ready { get; set; }
+        public IList<WorkflowHotCue> HotCues { get; set; } = new List<WorkflowHotCue>();
+        public IList<WorkflowHotCueEvidence> Evidence { get; set; } = new List<WorkflowHotCueEvidence>();
+        public IList<WorkflowMemoryCue> MemoryCues { get; set; } = new List<WorkflowMemoryCue>();
+        public IList<WorkflowImportChange> Changes { get; set; } = new List<WorkflowImportChange>();
+        public IList<string> Warnings { get; set; } = new List<string>();
+        public IList<string> Errors { get; set; } = new List<string>();
+    }
+
+    public sealed class WorkflowHotCueBatchResult
+    {
+        public bool Success { get; set; }
+        public bool DryRun { get; set; }
+        public int SelectedCount { get; set; }
+        public IList<WorkflowHotCueTrackResult> Tracks { get; set; } = new List<WorkflowHotCueTrackResult>();
         public IList<string> Errors { get; set; } = new List<string>();
     }
 }

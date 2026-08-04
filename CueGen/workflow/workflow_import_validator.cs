@@ -161,14 +161,26 @@ namespace CueGen.Workflow
                 if (!seen.Add(cue.Slot))
                     errors.Add($"hot_cues slot '{cue.Slot}' must be unique");
 
-                if (!string.Equals(cue.Name, mapping.Name, StringComparison.Ordinal))
-                    errors.Add($"Hot Cue {cue.Slot} must be named '{mapping.Name}'");
+                if (!mapping.AcceptsName(cue.Name))
+                {
+                    var allowedNames = new[] { mapping.Name }
+                        .Concat(mapping.AlternateNames ?? Array.Empty<string>());
+                    errors.Add($"Hot Cue {cue.Slot} must be named one of: {string.Join(", ", allowedNames)}");
+                }
                 if (!string.Equals(cue.Color, mapping.Color, StringComparison.Ordinal))
                     errors.Add($"Hot Cue {cue.Slot} must use color '{mapping.Color}'");
                 if (!cue.PositionMs.HasValue || cue.PositionMs.Value < 0)
                     errors.Add($"Hot Cue {cue.Slot} position_ms must be non-negative");
-                if (cue.PhraseStartVerified != true)
+                if (cue.Slot != "B" && cue.Slot != "C" && cue.PhraseStartVerified != true)
                     errors.Add($"Hot Cue {cue.Slot} must be verified on the first beat of a phrase");
+                if (cue.Slot == "B" && cue.VocalSectionVerified != true)
+                    errors.Add("Hot Cue B must be verified as the start of an audible four-beat vocal section");
+                if (cue.Slot != "B" && cue.VocalSectionVerified == true)
+                    errors.Add($"Hot Cue {cue.Slot} cannot be verified as a vocal section");
+                if (cue.Slot == "C" && cue.DropOffsetBeats != 32)
+                    errors.Add("Hot Cue C drop_offset_beats must be exactly 32");
+                if (cue.Slot != "C" && cue.DropOffsetBeats.HasValue)
+                    errors.Add($"Hot Cue {cue.Slot} cannot define drop_offset_beats");
 
                 if (cue.Slot == "H")
                 {

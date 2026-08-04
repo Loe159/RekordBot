@@ -106,10 +106,33 @@ namespace CueGen.Test
             var errors = new WorkflowImportValidator(WorkflowTaxonomy.LoadDefault()).Validate(document);
 
             Assert.That(errors, Has.Some.Contains("must be unique"));
-            Assert.That(errors, Has.Some.Contains("must be named 'IN-32'"));
-            Assert.That(errors, Has.Some.Contains("must use color 'Green'"));
+            Assert.That(errors, Has.Some.Contains("must be named one of: INTRO"));
+            Assert.That(errors, Has.Some.Contains("must use color 'Yellow'"));
             Assert.That(errors, Has.Some.Contains("first beat of a phrase"));
             Assert.That(errors, Has.Some.Contains("8- or 16-beat loop"));
+        }
+
+        [Test]
+        public void ValidatorRequiresVocalEvidenceForBAndRejectsMinus16ForC()
+        {
+            var document = WorkflowImportParser.Parse(CreateJson(
+                "Hot Cues",
+                energy: 4,
+                includeMood: true,
+                genres: new[] { "House" },
+                yearOrigin: new[] { "2024" },
+                situations: new[] { "Main Floor" },
+                hotCues: new List<WorkflowHotCue>
+                {
+                    new() { Slot = "B", Name = "VOCAL", Color = "Pink", PositionMs = 30000, PhraseStartVerified = false, VocalSectionVerified = false },
+                    new() { Slot = "C", Name = "DROP -16", Color = "Green", PositionMs = 60000, PhraseStartVerified = false, DropOffsetBeats = 16 }
+                }));
+
+            var errors = new WorkflowImportValidator(WorkflowTaxonomy.LoadDefault()).Validate(document);
+
+            Assert.That(errors, Has.Some.Contains("audible four-beat vocal section"));
+            Assert.That(errors, Has.Some.Contains("Hot Cue C must be named one of: DROP -32"));
+            Assert.That(errors, Has.Some.Contains("drop_offset_beats must be exactly 32"));
         }
 
         [Test]
@@ -161,7 +184,8 @@ namespace CueGen.Test
                 var content = database.Table<Content>().Single(item => item.ID == TargetContentId);
                 Assert.That(content.Rating, Is.EqualTo(1));
                 Assert.That(content.ColorID, Is.EqualTo("2"));
-                Assert.That(GetAssigned(database, TargetContentId, "Status"), Is.EqualTo(new[] { "Hot Cues" }));
+                Assert.That(GetAssigned(database, TargetContentId, "Status"),
+                    Is.EqualTo(new[] { WorkflowImportService.ReviewStatus }));
                 Assert.That(GetAssigned(database, TargetContentId, "Genre"), Is.EquivalentTo(new[] { "House", "Techno", "Remix" }));
                 Assert.That(GetAssigned(database, TargetContentId, "Année"), Is.EquivalentTo(new[] { "2024", "90FR" }));
                 Assert.That(GetAssigned(database, TargetContentId, "Situation"), Is.EquivalentTo(new[] { "Morning", "Peak Time" }));
@@ -182,6 +206,8 @@ namespace CueGen.Test
 
             using (var database = OpenDatabase())
             {
+                Assert.That(GetAssigned(database, TargetContentId, "Status"),
+                    Is.EqualTo(new[] { WorkflowImportService.ReviewStatus }));
                 Assert.That(database.Table<MyTag>().Count(), Is.EqualTo(tagCount));
                 Assert.That(database.Table<SongMyTag>().Count(), Is.EqualTo(relationCount));
             }
@@ -194,11 +220,14 @@ namespace CueGen.Test
                 yearOrigin: new[] { "2024", "90FR" },
                 situations: new[] { "Morning", "Peak Time" }));
             Assert.That(energyFive.Success, Is.True, string.Join(Environment.NewLine, energyFive.Errors));
+            Assert.That(energyFive.Changes.Select(change => change.Field), Does.Contain("energy"));
             using (var database = OpenDatabase())
             {
                 var content = database.Table<Content>().Single(item => item.ID == TargetContentId);
                 Assert.That(content.Rating, Is.EqualTo(5));
                 Assert.That(content.ColorID, Is.EqualTo("2"));
+                Assert.That(GetAssigned(database, TargetContentId, "Status"),
+                    Is.EqualTo(new[] { WorkflowImportService.ReviewStatus }));
             }
         }
 
@@ -285,7 +314,7 @@ namespace CueGen.Test
                     ContentID = content.ID,
                     InMsec = 90000,
                     InFrame = 13500,
-                    Kind = 5,
+                    Kind = 7,
                     Color = -1,
                     ColorTableIndex = 5,
                     Comment = "MANUAL BREAK",
@@ -322,22 +351,30 @@ namespace CueGen.Test
                     .Where(cue => cue.UUID != null && cue.UUID.StartsWith("e134b57e-5bc1-4554-", StringComparison.Ordinal))
                     .OrderBy(cue => cue.Kind)
                     .ToList();
-                Assert.That(managed.Select(cue => cue.Kind), Is.EqualTo(new int?[] { 1, 3, 6 }));
-                Assert.That(managed.Select(cue => cue.Comment), Is.EqualTo(new[] { "IN-32", "DROP 1", "OUT-32" }));
-                Assert.That(managed.Select(cue => cue.ColorTableIndex), Is.EqualTo(new int?[] { 22, 42, 38 }));
+                Assert.That(managed.Select(cue => cue.Kind), Is.EqualTo(new int?[] { 1, 2, 3, 5, 6, 9 }));
+                Assert.That(managed.Select(cue => cue.Comment), Is.EqualTo(new[]
+                {
+                    "INTRO", "VOCAL", "DROP -32", "DROP 1", "BREAKDOWN", "LOOP"
+                }));
+                Assert.That(managed.Select(cue => cue.ColorTableIndex), Is.EqualTo(new int?[] { 32, 45, 22, 42, 56, 38 }));
 
                 var aggregate = database.Table<ContentCue>().Single(row => row.ContentID == TargetContentId);
                 var aggregateCues = JsonConvert.DeserializeObject<IList<Cue>>(aggregate.Cues);
                 Assert.That(aggregate.rb_cue_count, Is.EqualTo(cues.Count));
                 Assert.That(aggregateCues.Select(cue => cue.ID), Is.EquivalentTo(cues.Select(cue => cue.ID)));
-                Assert.That(GetAssigned(database, TargetContentId, "Status"), Is.Empty);
+                Assert.That(GetAssigned(database, TargetContentId, "Status"),
+                    Is.EqualTo(new[] { WorkflowImportService.ReviewStatus }));
             }
 
             var repeated = service.ImportJson(json);
             Assert.That(repeated.Success, Is.True, string.Join(Environment.NewLine, repeated.Errors));
             Assert.That(repeated.Changes, Is.Empty);
             using (var database = OpenDatabase())
+            {
                 Assert.That(database.Table<Cue>().Count(cue => cue.ContentID == TargetContentId), Is.EqualTo(cueCount));
+                Assert.That(GetAssigned(database, TargetContentId, "Status"),
+                    Is.EqualTo(new[] { WorkflowImportService.ReviewStatus }));
+            }
         }
 
         [Test]
@@ -361,10 +398,10 @@ namespace CueGen.Test
                 .OrderBy(cue => cue.Kind)
                 .ToList();
             Assert.That(managed.Select(cue => cue.Kind), Is.EqualTo(new int?[] { 1, 2, 3, 5, 6, 7, 8, 9 }));
-            Assert.That(managed.Select(cue => cue.ColorTableIndex), Is.EqualTo(new int?[] { 22, 32, 42, 5, 38, 56, 45, 9 }));
+            Assert.That(managed.Select(cue => cue.ColorTableIndex), Is.EqualTo(new int?[] { 32, 45, 22, 42, 56, 56, 45, 38 }));
             Assert.That(managed.Select(cue => cue.Comment), Is.EqualTo(new[]
             {
-                "IN-32", "BUILD-16", "DROP 1", "BREAK", "OUT-32", "PEAK / DROP 2", "VOCAL / HOOK", "LOOP"
+                "INTRO", "VOCAL", "DROP -32", "DROP 1", "BREAKDOWN", "PEAK / DROP 2", "VOCAL / HOOK", "LOOP"
             }));
             var loop = managed.Single(cue => cue.Kind == 9);
             Assert.That(loop.ActiveLoop, Is.EqualTo(1));
@@ -403,7 +440,8 @@ namespace CueGen.Test
             Assert.That(result.Errors, Has.Some.Contains("Hot Cues E"));
             Assert.That(File.ReadAllBytes(databasePath), Is.EqualTo(before));
             using (var database = OpenDatabase())
-                Assert.That(GetAssigned(database, TargetContentId, "Status"), Is.EqualTo(new[] { "Hot Cues" }));
+                Assert.That(GetAssigned(database, TargetContentId, "Status"),
+                    Is.EqualTo(new[] { WorkflowImportService.ReviewStatus }));
         }
 
         [Test]
@@ -486,7 +524,8 @@ namespace CueGen.Test
             {
                 var content = database.Table<Content>().Single(item => item.ID == TargetContentId);
                 Assert.That(content.Rating, Is.EqualTo(3));
-                Assert.That(GetAssigned(database, TargetContentId, "Status"), Is.EqualTo(new[] { "Hot Cues" }));
+                Assert.That(GetAssigned(database, TargetContentId, "Status"),
+                    Is.EqualTo(new[] { WorkflowImportService.ReviewStatus }));
                 Assert.That(database.Table<Cue>().Count(cue => cue.ContentID == TargetContentId), Is.EqualTo(cueCount));
                 Assert.That(database.Table<ContentCue>().Single(row => row.ContentID == TargetContentId).Cues, Is.EqualTo(aggregateJson));
             }
@@ -564,9 +603,12 @@ namespace CueGen.Test
         {
             return new List<WorkflowHotCue>
             {
-                new() { Slot = "A", Name = "IN-32", Color = "Green", PositionMs = 0, PhraseStartVerified = true },
-                new() { Slot = "C", Name = "DROP 1", Color = "Red", PositionMs = 60000, PhraseStartVerified = true },
-                new() { Slot = "E", Name = "OUT-32", Color = "Orange", PositionMs = 240000, PhraseStartVerified = true }
+                new() { Slot = "A", Name = "INTRO", Color = "Yellow", PositionMs = 0, PhraseStartVerified = true },
+                new() { Slot = "B", Name = "VOCAL", Color = "Pink", PositionMs = 30000, PhraseStartVerified = false, VocalSectionVerified = true },
+                new() { Slot = "C", Name = "DROP -32", Color = "Green", PositionMs = 60000, PhraseStartVerified = false, DropOffsetBeats = 32 },
+                new() { Slot = "D", Name = "DROP 1", Color = "Red", PositionMs = 90000, PhraseStartVerified = true },
+                new() { Slot = "E", Name = "BREAKDOWN", Color = "Purple", PositionMs = 120000, PhraseStartVerified = true },
+                new() { Slot = "H", Name = "LOOP", Color = "Orange", PositionMs = 210000, PhraseStartVerified = true, LoopBeats = 16 }
             };
         }
 
@@ -574,14 +616,14 @@ namespace CueGen.Test
         {
             return new List<WorkflowHotCue>
             {
-                new() { Slot = "A", Name = "IN-32", Color = "Green", PositionMs = 0, PhraseStartVerified = true },
-                new() { Slot = "B", Name = "BUILD-16", Color = "Yellow", PositionMs = 30000, PhraseStartVerified = true },
-                new() { Slot = "C", Name = "DROP 1", Color = "Red", PositionMs = 60000, PhraseStartVerified = true },
-                new() { Slot = "D", Name = "BREAK", Color = "Blue", PositionMs = 90000, PhraseStartVerified = true },
-                new() { Slot = "E", Name = "OUT-32", Color = "Orange", PositionMs = 120000, PhraseStartVerified = true },
+                new() { Slot = "A", Name = "INTRO", Color = "Yellow", PositionMs = 0, PhraseStartVerified = true },
+                new() { Slot = "B", Name = "VOCAL", Color = "Pink", PositionMs = 30000, PhraseStartVerified = false, VocalSectionVerified = true },
+                new() { Slot = "C", Name = "DROP -32", Color = "Green", PositionMs = 60000, PhraseStartVerified = false, DropOffsetBeats = 32 },
+                new() { Slot = "D", Name = "DROP 1", Color = "Red", PositionMs = 90000, PhraseStartVerified = true },
+                new() { Slot = "E", Name = "BREAKDOWN", Color = "Purple", PositionMs = 120000, PhraseStartVerified = true },
                 new() { Slot = "F", Name = "PEAK / DROP 2", Color = "Purple", PositionMs = 150000, PhraseStartVerified = true },
                 new() { Slot = "G", Name = "VOCAL / HOOK", Color = "Pink", PositionMs = 180000, PhraseStartVerified = true },
-                new() { Slot = "H", Name = "LOOP", Color = "Cyan", PositionMs = 210000, PhraseStartVerified = true, LoopBeats = 16 }
+                new() { Slot = "H", Name = "LOOP", Color = "Orange", PositionMs = 210000, PhraseStartVerified = true, LoopBeats = 16 }
             };
         }
 

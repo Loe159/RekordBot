@@ -86,8 +86,11 @@
           "hot_cues": {
             "allOf": [
               {"contains": {"properties": {"slot": {"const": "A"}}, "required": ["slot"]}},
+              {"contains": {"properties": {"slot": {"const": "B"}}, "required": ["slot"]}},
               {"contains": {"properties": {"slot": {"const": "C"}}, "required": ["slot"]}},
-              {"contains": {"properties": {"slot": {"const": "E"}}, "required": ["slot"]}}
+              {"contains": {"properties": {"slot": {"const": "D"}}, "required": ["slot"]}},
+              {"contains": {"properties": {"slot": {"const": "E"}}, "required": ["slot"]}},
+              {"contains": {"properties": {"slot": {"const": "H"}}, "required": ["slot"]}}
             ]
           }
         }
@@ -131,20 +134,32 @@
         "name": {"type": "string"},
         "color": {"type": "string"},
         "position_ms": {"type": "integer", "minimum": 0},
-        "phrase_start_verified": {"const": true},
+        "phrase_start_verified": {"type": "boolean"},
+        "vocal_section_verified": {"type": ["boolean", "null"]},
+        "drop_offset_beats": {"type": ["integer", "null"]},
         "loop_beats": {"type": ["integer", "null"], "enum": [8, 16, null]}
-      }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"slot": {"not": {"const": "B"}}}},
+          "then": {"properties": {"vocal_section_verified": {"enum": [false, null]}}}
+        },
+        {
+          "if": {"properties": {"slot": {"not": {"const": "C"}}}},
+          "then": {"properties": {"drop_offset_beats": {"type": "null"}}}
+        }
+      ]
     },
     "hot_cue": {
       "oneOf": [
-        {"allOf": [{"$ref": "#/$defs/hot_cue_base"}, {"properties": {"slot": {"const": "A"}, "name": {"const": "IN-32"}, "color": {"const": "Green"}, "loop_beats": {"type": "null"}}}]},
-        {"allOf": [{"$ref": "#/$defs/hot_cue_base"}, {"properties": {"slot": {"const": "B"}, "name": {"const": "BUILD-16"}, "color": {"const": "Yellow"}, "loop_beats": {"type": "null"}}}]},
-        {"allOf": [{"$ref": "#/$defs/hot_cue_base"}, {"properties": {"slot": {"const": "C"}, "name": {"const": "DROP 1"}, "color": {"const": "Red"}, "loop_beats": {"type": "null"}}}]},
-        {"allOf": [{"$ref": "#/$defs/hot_cue_base"}, {"properties": {"slot": {"const": "D"}, "name": {"const": "BREAK"}, "color": {"const": "Blue"}, "loop_beats": {"type": "null"}}}]},
-        {"allOf": [{"$ref": "#/$defs/hot_cue_base"}, {"properties": {"slot": {"const": "E"}, "name": {"const": "OUT-32"}, "color": {"const": "Orange"}, "loop_beats": {"type": "null"}}}]},
-        {"allOf": [{"$ref": "#/$defs/hot_cue_base"}, {"properties": {"slot": {"const": "F"}, "name": {"const": "PEAK / DROP 2"}, "color": {"const": "Purple"}, "loop_beats": {"type": "null"}}}]},
-        {"allOf": [{"$ref": "#/$defs/hot_cue_base"}, {"properties": {"slot": {"const": "G"}, "name": {"const": "VOCAL / HOOK"}, "color": {"const": "Pink"}, "loop_beats": {"type": "null"}}}]},
-        {"allOf": [{"$ref": "#/$defs/hot_cue_base"}, {"required": ["loop_beats"], "properties": {"slot": {"const": "H"}, "name": {"const": "LOOP"}, "color": {"const": "Cyan"}, "loop_beats": {"enum": [8, 16]}}}]}
+        {"allOf": [{"$ref": "#/$defs/hot_cue_base"}, {"properties": {"slot": {"const": "A"}, "name": {"const": "INTRO"}, "color": {"const": "Yellow"}, "phrase_start_verified": {"const": true}, "loop_beats": {"type": "null"}}}]},
+        {"allOf": [{"$ref": "#/$defs/hot_cue_base"}, {"required": ["vocal_section_verified"], "properties": {"slot": {"const": "B"}, "name": {"const": "VOCAL"}, "color": {"const": "Pink"}, "vocal_section_verified": {"const": true}, "loop_beats": {"type": "null"}}}]},
+        {"allOf": [{"$ref": "#/$defs/hot_cue_base"}, {"required": ["drop_offset_beats"], "properties": {"slot": {"const": "C"}, "name": {"const": "DROP -32"}, "color": {"const": "Green"}, "drop_offset_beats": {"const": 32}, "loop_beats": {"type": "null"}}}]},
+        {"allOf": [{"$ref": "#/$defs/hot_cue_base"}, {"properties": {"slot": {"const": "D"}, "name": {"const": "DROP 1"}, "color": {"const": "Red"}, "phrase_start_verified": {"const": true}, "loop_beats": {"type": "null"}}}]},
+        {"allOf": [{"$ref": "#/$defs/hot_cue_base"}, {"properties": {"slot": {"const": "E"}, "name": {"const": "BREAKDOWN"}, "color": {"const": "Purple"}, "phrase_start_verified": {"const": true}, "loop_beats": {"type": "null"}}}]},
+        {"allOf": [{"$ref": "#/$defs/hot_cue_base"}, {"properties": {"slot": {"const": "F"}, "name": {"const": "PEAK / DROP 2"}, "color": {"const": "Purple"}, "phrase_start_verified": {"const": true}, "loop_beats": {"type": "null"}}}]},
+        {"allOf": [{"$ref": "#/$defs/hot_cue_base"}, {"properties": {"slot": {"const": "G"}, "name": {"const": "VOCAL / HOOK"}, "color": {"const": "Pink"}, "phrase_start_verified": {"const": true}, "loop_beats": {"type": "null"}}}]},
+        {"allOf": [{"$ref": "#/$defs/hot_cue_base"}, {"required": ["loop_beats"], "properties": {"slot": {"const": "H"}, "name": {"const": "LOOP"}, "color": {"const": "Orange"}, "phrase_start_verified": {"const": true}, "loop_beats": {"enum": [8, 16]}}}]}
       ]
     }
   }

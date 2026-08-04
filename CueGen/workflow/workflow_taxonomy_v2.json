@@ -47,13 +47,13 @@
     "Peak Time"
   ],
   "hot_cues": {
-    "A": {"name": "IN-32", "color": "Green", "color_table_index": 22, "required": true},
-    "B": {"name": "BUILD-16", "color": "Yellow", "color_table_index": 32, "required": false},
-    "C": {"name": "DROP 1", "color": "Red", "color_table_index": 42, "required": true},
-    "D": {"name": "BREAK", "color": "Blue", "color_table_index": 5, "required": false},
-    "E": {"name": "OUT-32", "color": "Orange", "color_table_index": 38, "required": true},
+    "A": {"name": "INTRO", "color": "Yellow", "color_table_index": 32, "required": true},
+    "B": {"name": "VOCAL", "color": "Pink", "color_table_index": 45, "required": true},
+    "C": {"name": "DROP -32", "color": "Green", "color_table_index": 22, "required": true},
+    "D": {"name": "DROP 1", "color": "Red", "color_table_index": 42, "required": true},
+    "E": {"name": "BREAKDOWN", "color": "Purple", "color_table_index": 56, "required": true},
     "F": {"name": "PEAK / DROP 2", "color": "Purple", "color_table_index": 56, "required": false},
     "G": {"name": "VOCAL / HOOK", "color": "Pink", "color_table_index": 45, "required": false},
-    "H": {"name": "LOOP", "color": "Cyan", "color_table_index": 9, "required": false}
+    "H": {"name": "LOOP", "color": "Orange", "color_table_index": 38, "required": true}
   }
 }
