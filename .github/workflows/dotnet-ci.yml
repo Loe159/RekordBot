@@ -1,0 +1,36 @@
+name: .NET CI
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 6
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '6.0.x'
+          cache: true
+          cache-dependency-path: '**/*.csproj'
+
+      - name: Restore
+        run: dotnet restore CueGen.sln
+
+      - name: Build
+        run: dotnet build CueGen.sln --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test CueGen.Test/CueGen.Test.csproj --configuration Release --no-build --logger "console;verbosity=normal"
