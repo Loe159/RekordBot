@@ -21,6 +21,7 @@ namespace CueGen.Console
         readonly Config Config = new();
         bool Backup = true;
         bool ReportProgress = true;
+        bool AirtableSync;
         string ImportPath;
         string TaxonomyPath;
 
@@ -66,6 +67,7 @@ namespace CueGen.Console
                         { "h|help", "Show this message and exit", v => showHelp = v != null },
                         { "dryrun", "Do not alter Rekordbox database, only perform a test run", v => program.Config.DryRun = v != null },
                         { "import=", "Import one RekordBot workflow 2.0 metadata document", v => program.ImportPath = v },
+                        { "airtable-sync", "Import Airtable tracks waiting for Rekordbox preparation", v => program.AirtableSync = v != null },
                         { "workflow-hotcues|generate-workflow-hotcues", "Generate deterministic workflow Hot Cues and Memory Cues for tracks selected by --glob", v => program.Config.GenerateWorkflowHotCues = v != null },
                         { "taxonomy=", "Workflow 2.0 taxonomy JSON (default is embedded)", v => program.TaxonomyPath = v },
                         { "hc|hotcues", "Create hot cue points instead of memory cue points", v => program.Config.HotCues = v != null },
@@ -254,6 +256,11 @@ namespace CueGen.Console
 
             Config.DatabasePath = RekordboxSafety.ValidateDatabase(Config.DatabasePath);
 
+            if (AirtableSync && (!string.IsNullOrWhiteSpace(ImportPath) || Config.GenerateWorkflowHotCues))
+            {
+                Log.Error("--airtable-sync cannot be combined with --import or --workflow-hotcues");
+                return false;
+            }
             if (Config.GenerateWorkflowHotCues && !string.IsNullOrWhiteSpace(ImportPath))
             {
                 Log.Error("--workflow-hotcues and --import cannot be used together");
@@ -285,6 +292,17 @@ namespace CueGen.Console
             else
             {
                 Log.Info("Dry run: database backup skipped because no mutation is allowed");
+            }
+
+            if (AirtableSync)
+            {
+                var taxonomy = string.IsNullOrWhiteSpace(TaxonomyPath)
+                    ? WorkflowTaxonomy.LoadDefault()
+                    : WorkflowTaxonomy.Load(TaxonomyPath);
+                var airtableOptions = AirtableSyncOptions.Load(Environment.GetEnvironmentVariable);
+                var result = new AirtableSyncService(Config, taxonomy, airtableOptions).Synchronize();
+                System.Console.Out.WriteLine(JsonConvert.SerializeObject(result, Formatting.Indented));
+                return result.Success;
             }
 
             if (!string.IsNullOrWhiteSpace(ImportPath))
