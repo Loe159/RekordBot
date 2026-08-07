@@ -1,5 +1,6 @@
 name: .NET CI
 
+# Validation branch uses the same build/test pipeline as master.
 on:
   push:
     branches: [ master ]
