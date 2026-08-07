@@ -1,5 +1,6 @@
 name: .NET CI
 
+# Validation branch trigger; functional pipeline is identical to master.
 on:
   push:
     branches: [ master ]
